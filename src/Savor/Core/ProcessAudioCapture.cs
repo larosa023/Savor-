@@ -43,8 +43,15 @@ public sealed class ProcessAudioCapture : IDisposable
         var cap = new ProcessAudioCapture(pid, sampleRate);
         try
         {
-            await cap.ActivateAsync();
-            cap.Begin();
+            // The audio client has no cross-apartment proxy: create and use it only on MTA threads
+            // (never the UI thread), otherwise every call fails with InvalidCastException.
+            await Task.Run(async () =>
+            {
+                await cap.ActivateAsync().ConfigureAwait(false);
+                cap.Begin();
+                if (!cap._started.Wait(3000)) throw new TimeoutException("App audio capture didn't start.");
+                if (cap._startError != null) throw cap._startError;
+            }).ConfigureAwait(false);
             return cap;
         }
         catch
@@ -93,16 +100,31 @@ public sealed class ProcessAudioCapture : IDisposable
         _capture = _client.AudioCaptureClient;
     }
 
+    readonly ManualResetEventSlim _started = new(false);
+    Exception? _startError;
+
     void Begin()
     {
-        _client!.Start();
         _thread = new Thread(Loop) { IsBackground = true, Name = $"Savor app audio {ProcessId}", Priority = ThreadPriority.AboveNormal };
+        _thread.SetApartmentState(ApartmentState.MTA);
         _thread.Start();
     }
 
     void Loop()
     {
         var handles = new WaitHandle[] { _stop, _ready };
+        try
+        {
+            _client!.Start();
+        }
+        catch (Exception ex)
+        {
+            _startError = ex;
+            _started.Set();
+            ReleaseClient();
+            return;
+        }
+        _started.Set();
         try
         {
             while (WaitHandle.WaitAny(handles, 200) != 0)
@@ -121,6 +143,15 @@ public sealed class ProcessAudioCapture : IDisposable
             }
         }
         catch { /* app exited or device changed: the mixer re-attaches */ }
+        finally { ReleaseClient(); } // on this (MTA) thread, where the client lives
+    }
+
+    void ReleaseClient()
+    {
+        try { _client?.Stop(); } catch { }
+        try { _client?.Dispose(); } catch { }
+        _client = null;
+        _capture = null;
     }
 
     public bool IsAlive => _thread is { IsAlive: true };
@@ -128,11 +159,8 @@ public sealed class ProcessAudioCapture : IDisposable
     public void Dispose()
     {
         _stop.Set();
-        _thread?.Join(1000);
-        try { _client?.Stop(); } catch { }
-        try { _client?.Dispose(); } catch { }
-        _client = null;
-        _capture = null;
+        if (_thread != null) _thread.Join(1000);
+        else if (_client != null) Task.Run(ReleaseClient).Wait(1000); // never started: release on an MTA thread
     }
 
     // ===================== finding apps =====================
