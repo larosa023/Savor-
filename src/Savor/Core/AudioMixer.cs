@@ -39,6 +39,8 @@ public sealed class AudioMixer : IDisposable
     public bool DesktopEnabled { get; set; }
     public float DesktopVolume { get; set; }
     public float MicVolume { get; set; }
+    public bool DesktopMuted { get; set; }
+    public bool MicMuted { get; set; }
     public bool HasMic => _mic != null;
 
     /// <summary>Peak levels 0..1, updated per audio packet (read from UI for meters).</summary>
@@ -135,8 +137,8 @@ public sealed class AudioMixer : IDisposable
             if (read < n) Array.Clear(_micBuf, read, n - read);
         }
 
-        float dv = DesktopEnabled ? DesktopVolume : 0f;
-        float mv = MicVolume;
+        float dv = DesktopEnabled && !DesktopMuted ? DesktopVolume : 0f;
+        float mv = MicMuted ? 0f : MicVolume;
         float dPeak = 0, mPeak = 0;
         for (int i = 0; i < n; i++)
         {
@@ -211,6 +213,26 @@ public sealed class AudioMixer : IDisposable
     }
 
     // ---- device listing ----
+
+    public static string DefaultOutputName()
+    {
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            return en.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).FriendlyName;
+        }
+        catch { return "No output device"; }
+    }
+
+    public static string DefaultMicName()
+    {
+        try
+        {
+            using var en = new MMDeviceEnumerator();
+            return en.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications).FriendlyName;
+        }
+        catch { return "No microphone"; }
+    }
 
     public static List<AudioDevice> Microphones()
     {

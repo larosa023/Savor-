@@ -46,6 +46,11 @@ public sealed class CaptureEngine : IDisposable
     public bool IsRunning => _proc is { HasExited: false };
     public AudioMixer? Mixer => _mixer;
 
+    public TimeSpan CpuTime
+    {
+        get { try { return _proc is { HasExited: false } p ? p.TotalProcessorTime : TimeSpan.Zero; } catch { return TimeSpan.Zero; } }
+    }
+
     /// <summary>Raised whenever BufferActive / Recording / running state changes (any thread).</summary>
     public event Action? StateChanged;
     /// <summary>Raised when capture fails unexpectedly (any thread).</summary>
@@ -209,7 +214,11 @@ public sealed class CaptureEngine : IDisposable
         {
             try
             {
-                _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume);
+                _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume)
+                {
+                    DesktopMuted = s.DesktopMuted,
+                    MicMuted = s.MicMuted,
+                };
                 rate = _mixer.SampleRate;
                 _audioQueue = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>(), 1024);
                 _audioConnected = false;

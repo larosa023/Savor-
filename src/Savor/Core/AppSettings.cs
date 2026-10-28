@@ -73,6 +73,10 @@ public sealed class AppSettings
     /// <summary>null = microphone off, "default" = system default mic, otherwise an endpoint id.</summary>
     public string? MicDeviceId { get; set; } = null;
     public double MicVolume { get; set; } = 1.0;
+    public bool DesktopMuted { get; set; }
+    public bool MicMuted { get; set; }
+
+    public bool ShowPreview { get; set; } = true;
 
     public string Container { get; set; } = "mp4";
 

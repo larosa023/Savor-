@@ -14,6 +14,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Savor.Core;
 
@@ -25,6 +26,19 @@ public partial class MainWindow : Window
     readonly CaptureEngine _engine;
     readonly ObservableCollection<ClipItem> _clips = new();
     readonly DispatcherTimer _uiTimer;
+    readonly PreviewSource _preview = new();
+    WriteableBitmap? _previewBitmap;
+    bool _previewHasFrame;
+    DateTime _lastPreviewStart = DateTime.MinValue;
+    AudioMixer? _monitor;
+    string? _monitorKey;
+    DateTime _lastMonitorTry = DateTime.MinValue;
+    double _deskLevel, _micLevel, _deskPeak, _micPeak;
+    DateTime _deskPeakAt, _micPeakAt;
+    DateTime _lastStatus = DateTime.MinValue;
+    TimeSpan _lastCpu;
+    DateTime _lastCpuAt = DateTime.UtcNow;
+    FrameworkElement? _mainPage;
 
     HotkeyManager? _hotkeys;
     TrayIcon? _tray;
@@ -58,8 +72,13 @@ public partial class MainWindow : Window
         _uiTimer.Tick += (_, _) => Tick();
 
         SourceInitialized += (_, _) => OnSourceInitialized();
-        StateChanged += (_, _) => Root.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
-        Activated += (_, _) => { if (HomePage.Visibility == Visibility.Visible) ReloadClips(); };
+        StateChanged += (_, _) =>
+        {
+            Root.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+            MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+        };
+        Activated += (_, _) => { if (CapturesPage.Visibility == Visibility.Visible) ReloadClips(); };
+        _mainPage = StudioPage;
 
         // Make sure the window handle exists even when starting in the tray, so hotkeys work.
         new WindowInteropHelper(this).EnsureHandle();
@@ -96,6 +115,7 @@ public partial class MainWindow : Window
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
 
         LoadSettingsIntoUi();
+        LoadStudioUi();
         ReloadClips();
         RefreshState();
         _uiTimer.Start();
@@ -280,8 +300,12 @@ public partial class MainWindow : Window
             CaptureInfo.Text = string.Join("  ·  ", parts);
         }
 
-        MicIcon.Opacity = string.IsNullOrEmpty(_settings.MicDeviceId) ? 0.35 : 1;
+        PreviewBufferChip.Visibility = buffer ? Visibility.Visible : Visibility.Collapsed;
+        PreviewBufferText.Text = "REPLAY " + FormatShort(_settings.ReplaySeconds);
+        PreviewRecChip.Visibility = rec ? Visibility.Visible : Visibility.Collapsed;
+        StatusDot.Fill = (Brush)FindResource(rec ? "RecBrush" : _engine.IsRunning ? "LiveBrush" : "FaintBrush");
         _tray?.Update(buffer, rec);
+        UpdateTrackLabels();
     }
 
     void Tick()
@@ -290,20 +314,288 @@ public partial class MainWindow : Window
         {
             var t = DateTime.UtcNow - _engine.RecordingStartedUtc;
             RecTimer.Text = t.ToString(@"hh\:mm\:ss");
-            HeaderRecText.Text = "REC " + (t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"mm\:ss"));
+            var shortT = t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"mm\:ss");
+            HeaderRecText.Text = "REC " + shortT;
+            PreviewRecText.Text = "REC " + shortT;
         }
 
-        var mixer = _engine.IsRunning ? _engine.Mixer : null;
-        SetMeter(DesktopMeter, mixer?.DesktopLevel ?? 0);
-        SetMeter(MicMeter, mixer?.MicLevel ?? 0);
+        bool shown = IsVisible && WindowState != WindowState.Minimized;
+        UpdatePreview(shown);
+        UpdateMonitor(shown);
+        if (!shown) return;
+
+        var mixer = _engine.IsRunning && _engine.Mixer != null ? _engine.Mixer : _monitor;
+        UpdateMeter(DeskMask, DeskPeak, mixer?.DesktopLevel ?? 0, ref _deskLevel, ref _deskPeak, ref _deskPeakAt);
+        UpdateMeter(MicMask, MicPeak, mixer?.MicLevel ?? 0, ref _micLevel, ref _micPeak, ref _micPeakAt);
+
+        if ((DateTime.UtcNow - _lastStatus).TotalSeconds >= 1) UpdateStatus();
     }
 
-    static void SetMeter(Border meter, float level)
+    static void UpdateMeter(Border mask, Border peakTick, float level, ref double cur, ref double peak, ref DateTime peakAt)
     {
-        // perceptual-ish curve so normal speech/game audio is visible
-        double target = Math.Sqrt(Math.Clamp(level, 0, 1)) * 90;
-        double cur = meter.Width;
-        meter.Width = target > cur ? target : Math.Max(0, cur - 4); // fast attack, slow release
+        // map -60..0 dBFS onto the bar
+        double db = level > 0.000001 ? 20 * Math.Log10(level) : -100;
+        double target = Math.Clamp((db + 60) / 60, 0, 1);
+        cur = target > cur ? target : Math.Max(target, cur - 0.03); // fast attack, smooth release
+        if (cur >= peak) { peak = cur; peakAt = DateTime.UtcNow; }
+        else if ((DateTime.UtcNow - peakAt).TotalSeconds > 1.2) peak = Math.Max(cur, peak - 0.015);
+
+        if (mask.Parent is not FrameworkElement host) return;
+        double w = host.ActualWidth;
+        mask.Width = Math.Max(0, (1 - cur) * w);
+        peakTick.Margin = new Thickness(Math.Max(0, peak * w - 2), 0, 0, 0);
+        peakTick.Visibility = peak > 0.01 ? Visibility.Visible : Visibility.Hidden;
+    }
+
+    // ----- live preview -----
+
+    void UpdatePreview(bool shown)
+    {
+        var d = _engine.Display;
+        var enc = _engine.Encoder;
+        bool want = shown && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
+                    && d != null && enc != null && Ffmpeg.Path != null;
+        if (!want)
+        {
+            if (_preview.IsRunning) _preview.Stop();
+            _previewHasFrame = false;
+            PreviewBrush.ImageSource = null;
+            PreviewPlaceholder.Visibility = Visibility.Visible;
+            PreviewPlaceholderText.Text = !_settings.ShowPreview ? "Preview hidden — capture keeps running"
+                : enc == null ? "Waiting for encoder…" : "Preview paused";
+            PreviewLiveDot.Fill = (Brush)FindResource("FaintBrush");
+            return;
+        }
+
+        var key = PreviewSource.MakeKey(d!, enc!, _settings.CaptureCursor);
+        if ((!_preview.IsRunning || _preview.Key != key) && (DateTime.UtcNow - _lastPreviewStart).TotalSeconds > 2)
+        {
+            _lastPreviewStart = DateTime.UtcNow;
+            _preview.Start(d!, enc!, _settings.CaptureCursor);
+            _previewBitmap = new WriteableBitmap(Math.Max(2, _preview.Width), Math.Max(2, _preview.Height), 96, 96, PixelFormats.Bgr32, null);
+            PreviewBrush.ImageSource = _previewBitmap;
+            _previewHasFrame = false;
+            PreviewLabel.Text = $"Display {d!.OutputIndex + 1}  ·  {d.Width}×{d.Height}";
+        }
+
+        var bmp = _previewBitmap;
+        if (bmp != null && _preview.TryTakeFrame(buf =>
+            {
+                if (buf.Length == bmp.PixelWidth * bmp.PixelHeight * 4)
+                    bmp.WritePixels(new Int32Rect(0, 0, bmp.PixelWidth, bmp.PixelHeight), buf, bmp.PixelWidth * 4, 0);
+            }))
+        {
+            if (!_previewHasFrame)
+            {
+                _previewHasFrame = true;
+                PreviewPlaceholder.Visibility = Visibility.Collapsed;
+                PreviewLiveDot.Fill = (Brush)FindResource("LiveBrush");
+            }
+        }
+        else if (!_previewHasFrame)
+        {
+            PreviewPlaceholder.Visibility = Visibility.Visible;
+            PreviewPlaceholderText.Text = "Starting preview…";
+        }
+    }
+
+    void TogglePreview_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.ShowPreview = !_settings.ShowPreview;
+        _settings.Save();
+        PreviewEyeIcon.Text = _settings.ShowPreview ? "\uE7B3" : "\uED1A";
+    }
+
+    // ----- audio monitoring when not capturing -----
+
+    void UpdateMonitor(bool shown)
+    {
+        bool anyAudio = _settings.DesktopAudio || !string.IsNullOrEmpty(_settings.MicDeviceId);
+        bool want = shown && !_engine.IsRunning && anyAudio;
+        string key = $"{_settings.DesktopAudio}|{_settings.MicDeviceId}";
+        if (!want || key != _monitorKey)
+        {
+            if (_monitor != null)
+            {
+                try { _monitor.Dispose(); } catch { }
+                _monitor = null;
+            }
+            _monitorKey = null;
+        }
+        if (want && _monitor == null && (DateTime.UtcNow - _lastMonitorTry).TotalSeconds > 5)
+        {
+            _lastMonitorTry = DateTime.UtcNow;
+            try
+            {
+                _monitor = new AudioMixer(_settings.DesktopAudio, _settings.DesktopVolume, _settings.MicDeviceId, _settings.MicVolume)
+                {
+                    DesktopMuted = _settings.DesktopMuted,
+                    MicMuted = _settings.MicMuted,
+                };
+                _monitor.Start();
+                _monitorKey = key;
+            }
+            catch
+            {
+                try { _monitor?.Dispose(); } catch { }
+                _monitor = null;
+            }
+        }
+    }
+
+    // ----- status bar -----
+
+    void UpdateStatus()
+    {
+        _lastStatus = DateTime.UtcNow;
+        var cpuNow = _engine.CpuTime + _preview.CpuTime;
+        try { cpuNow += Process.GetCurrentProcess().TotalProcessorTime; } catch { }
+        var now = DateTime.UtcNow;
+        double wall = (now - _lastCpuAt).TotalSeconds;
+        double pct = wall > 0 ? Math.Max(0, (cpuNow - _lastCpu).TotalSeconds) / wall / Environment.ProcessorCount * 100 : 0;
+        _lastCpu = cpuNow;
+        _lastCpuAt = now;
+
+        string disk = "";
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(_settings.OutputFolder));
+            if (!string.IsNullOrEmpty(root))
+            {
+                var free = new DriveInfo(root).AvailableFreeSpace;
+                disk = $"  ·  {free / (double)(1L << 30):0} GB free";
+            }
+        }
+        catch { }
+        string state = _engine.Recording ? "Recording" : _engine.BufferActive ? "Replay buffer live" : "Idle";
+        StatusRight.Text = $"{state}  ·  CPU {pct:0.0}%{disk}";
+    }
+
+    // ----- studio panels -----
+
+    void LoadStudioUi()
+    {
+        _loadingUi = true;
+        try
+        {
+            SourceDisplayCombo.Items.Clear();
+            foreach (var d in _displays) SourceDisplayCombo.Items.Add(new ComboBoxItem { Content = d.Label, Tag = d.OutputIndex });
+            SelectByTag(SourceDisplayCombo, _engine.Display?.OutputIndex ?? 0);
+            SourceCursorToggle.IsChecked = _settings.CaptureCursor;
+            SourceDesktopToggle.IsChecked = _settings.DesktopAudio;
+
+            var outName = AudioMixer.DefaultOutputName();
+            SourceDesktopDevice.Text = _settings.DesktopAudio ? outName : "Off";
+            SourceMicCombo.Items.Clear();
+            SourceMicCombo.Items.Add(new ComboBoxItem { Content = "Off", Tag = "" });
+            SourceMicCombo.Items.Add(new ComboBoxItem { Content = "Default microphone", Tag = "default" });
+            var mics = AudioMixer.Microphones();
+            foreach (var m in mics) SourceMicCombo.Items.Add(new ComboBoxItem { Content = m.Name, Tag = m.Id });
+            if (!SelectByTag(SourceMicCombo, _settings.MicDeviceId ?? "")) SelectByTag(SourceMicCombo, "");
+
+            DeskVol.Value = _settings.DesktopVolume * 100;
+            MicVol.Value = _settings.MicVolume * 100;
+            DeskDevice.Text = _settings.DesktopAudio ? outName : "Turned off in Sources";
+            MicDevice.Text = _settings.MicDeviceId switch
+            {
+                null or "" => "Off — pick one in Sources",
+                "default" => AudioMixer.DefaultMicName(),
+                var id => mics.FirstOrDefault(m => m.Id == id)?.Name ?? "Unavailable"
+            };
+            PreviewEyeIcon.Text = _settings.ShowPreview ? "\uE7B3" : "\uED1A";
+            UpdateTrackLabels();
+        }
+        finally { _loadingUi = false; }
+    }
+
+    void UpdateTrackLabels()
+    {
+        DeskDb.Text = !_settings.DesktopAudio ? "Off" : _settings.DesktopMuted ? "Muted" : VolumeDb(_settings.DesktopVolume);
+        MicDb.Text = string.IsNullOrEmpty(_settings.MicDeviceId) ? "Off" : _settings.MicMuted ? "Muted" : VolumeDb(_settings.MicVolume);
+        DeskMuteIcon.Text = _settings.DesktopMuted || !_settings.DesktopAudio ? "\uE74F" : "\uE767";
+        MicMuteIcon.Text = _settings.MicMuted || string.IsNullOrEmpty(_settings.MicDeviceId) ? "\uEC54" : "\uE720";
+        DeskMuteIcon.Foreground = (Brush)FindResource(_settings.DesktopMuted ? "RecBrush" : "TextBrush");
+        MicMuteIcon.Foreground = (Brush)FindResource(_settings.MicMuted ? "RecBrush" : "TextBrush");
+        DeskVol.IsEnabled = _settings.DesktopAudio;
+        MicVol.IsEnabled = !string.IsNullOrEmpty(_settings.MicDeviceId);
+        MixerNote.Text = _engine.IsRunning ? "" : "Monitoring — not capturing";
+    }
+
+    static string VolumeDb(double v) => v <= 0.0001 ? "-∞ dB" : $"{20 * Math.Log10(v):+0.0;-0.0;0.0} dB";
+
+    void ApplyLiveAudio()
+    {
+        foreach (var m in new[] { _engine.Mixer, _monitor })
+        {
+            if (m == null) continue;
+            m.DesktopVolume = (float)_settings.DesktopVolume;
+            m.MicVolume = (float)_settings.MicVolume;
+            m.DesktopMuted = _settings.DesktopMuted;
+            m.MicMuted = _settings.MicMuted;
+        }
+        UpdateTrackLabels();
+    }
+
+    void TrackVolume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loadingUi || DeskDb == null || MicDb == null) return;
+        _settings.DesktopVolume = DeskVol.Value / 100;
+        _settings.MicVolume = MicVol.Value / 100;
+        _settings.Save();
+        ApplyLiveAudio();
+    }
+
+    void DeskMute_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.DesktopMuted = !_settings.DesktopMuted;
+        _settings.Save();
+        ApplyLiveAudio();
+    }
+
+    void MicMute_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.MicMuted = !_settings.MicMuted;
+        _settings.Save();
+        ApplyLiveAudio();
+    }
+
+    async void Source_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        _settings.DisplayIndex = SelectedTag<int>(SourceDisplayCombo);
+        _settings.CaptureCursor = SourceCursorToggle.IsChecked == true;
+        _settings.DesktopAudio = SourceDesktopToggle.IsChecked == true;
+        var mic = SelectedTag<string>(SourceMicCombo);
+        _settings.MicDeviceId = string.IsNullOrEmpty(mic) ? null : mic;
+        _settings.Save();
+
+        _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
+        _captureDirty = true;
+        LoadStudioUi();
+        SourceNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
+        await ApplyCaptureChangesAsync();
+        if (!_captureDirty) SourceNote.Visibility = Visibility.Collapsed;
+        RefreshState();
+    }
+
+    void Maximize_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    void Tab_Checked(object sender, RoutedEventArgs e)
+    {
+        if (StudioPage == null || CapturesPage == null) return;
+        var target = ReferenceEquals(sender, CapturesTab) ? CapturesPage : StudioPage;
+        if (SettingsPage.Visibility == Visibility.Visible)
+        {
+            if (_capturingHotkey != null) EndHotkeyCapture();
+            SettingsPage.Visibility = Visibility.Collapsed;
+            _ = ApplyCaptureChangesAsync();
+            LoadStudioUi();
+        }
+        var other = target == StudioPage ? CapturesPage : StudioPage;
+        _mainPage = target;
+        if (target.Visibility != Visibility.Visible) SwitchPage(target, other);
+        if (target == CapturesPage) ReloadClips();
     }
 
     void ShowError(string message)
@@ -598,12 +890,8 @@ public partial class MainWindow : Window
         DesktopVolumeValue.Text = $"{DesktopVolumeSlider.Value:0}%";
         MicVolumeValue.Text = $"{MicVolumeSlider.Value:0}%";
         // volume applies live, no restart needed
-        if (_engine.Mixer is { } m)
-        {
-            m.DesktopVolume = (float)_settings.DesktopVolume;
-            m.MicVolume = (float)_settings.MicVolume;
-        }
         _settings.Save();
+        ApplyLiveAudio();
     }
 
     void ReplaySlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -675,7 +963,8 @@ public partial class MainWindow : Window
         if (SettingsPage.Visibility == Visibility.Visible) { _ = BackAsync(); return; }
         LoadSettingsIntoUi();
         ApplyNote.Visibility = _engine.Recording && _captureDirty ? Visibility.Visible : Visibility.Collapsed;
-        SwitchPage(SettingsPage, HomePage);
+        var current = StudioPage.Visibility == Visibility.Visible ? (FrameworkElement)StudioPage : CapturesPage;
+        SwitchPage(SettingsPage, current);
     }
 
     void Back_Click(object sender, RoutedEventArgs e) => _ = BackAsync();
@@ -683,8 +972,9 @@ public partial class MainWindow : Window
     async Task BackAsync()
     {
         if (_capturingHotkey != null) EndHotkeyCapture();
-        SwitchPage(HomePage, SettingsPage);
+        SwitchPage(_mainPage ?? StudioPage, SettingsPage);
         ReloadClips();
+        LoadStudioUi();
         await ApplyCaptureChangesAsync();
         RefreshState();
     }
@@ -746,6 +1036,9 @@ public partial class MainWindow : Window
         if (_exiting) return;
         _exiting = true;
         _uiTimer.Stop();
+        _preview.Stop();
+        try { _monitor?.Dispose(); } catch { }
+        _monitor = null;
         if (_engine.Recording)
         {
             Notify("Finishing recording…", "Savor will close once it's saved.");
