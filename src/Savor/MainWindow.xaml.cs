@@ -94,10 +94,11 @@ public partial class MainWindow : Window
         RefreshState();
         _uiTimer.Start();
 
-        if (!Ffmpeg.Locate())
+        CaptureInfo.Text = "Getting ready…";
+        if (!await Ffmpeg.EnsureAsync())
         {
             CaptureInfo.Text = "FFmpeg missing";
-            ShowError("FFmpeg wasn't found. Put ffmpeg.exe next to Savor.exe (the release zip includes it), then restart Savor.");
+            ShowError("Savor couldn't unpack its capture engine. Check that %LOCALAPPDATA% is writable, or put ffmpeg.exe next to Savor.exe, then restart.");
             BufferToggle.IsEnabled = false;
             RecordButton.IsEnabled = false;
             return;

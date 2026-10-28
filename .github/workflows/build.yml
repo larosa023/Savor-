@@ -19,35 +19,38 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Savor.exe
-        run: >
-          dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true -p:DebugType=none -o publish
-
-      - name: Bundle FFmpeg
+      - name: Fetch FFmpeg (embedded into Savor.exe)
         shell: pwsh
         run: |
           $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
           Invoke-WebRequest $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
           $exe = Get-ChildItem ffmpeg-dl -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $exe.FullName publish/ffmpeg.exe
-          $lic = Get-ChildItem ffmpeg-dl -Recurse -Filter LICENSE.txt | Select-Object -First 1
-          if ($lic) { Copy-Item $lic.FullName publish/FFMPEG-LICENSE.txt }
-          & publish/ffmpeg.exe -hide_banner -filters | Select-String ddagrab
+          & $exe.FullName -hide_banner -filters | Select-String ddagrab
+          New-Item -ItemType Directory -Force ffmpeg | Out-Null
+          $in = [IO.File]::OpenRead($exe.FullName)
+          $out = [IO.File]::Create("ffmpeg/ffmpeg.exe.gz")
+          $gz = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
+          $in.CopyTo($gz); $gz.Dispose(); $out.Dispose(); $in.Dispose()
+          Get-Item ffmpeg/ffmpeg.exe.gz | Select-Object Name, Length
 
-      - name: Zip
+      - name: Publish Savor.exe
+        run: >
+          dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:DebugType=none -o publish
+
+      - name: Read version
         shell: pwsh
         run: |
-          Compress-Archive -Path publish/* -DestinationPath Savor-win-x64.zip
+          Get-ChildItem publish | Select-Object Name, Length
           $v = ([xml](Get-Content src/Savor/Savor.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Savor-win-x64
-          path: publish/
+          name: Savor
+          path: publish/Savor.exe
 
       # Every push to main publishes (or refreshes) the release for the version in Savor.csproj.
       - name: Publish release
@@ -57,5 +60,5 @@ jobs:
           tag_name: v${{ env.VERSION }}
           name: Savor ${{ env.VERSION }}
           target_commitish: ${{ github.sha }}
-          files: Savor-win-x64.zip
+          files: publish/Savor.exe
           make_latest: true

@@ -21,8 +21,8 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 
 ## Download
 
-Grab `Savor-win-x64.zip` from the [latest release](../../releases/latest), unzip it anywhere and run **Savor.exe**.
-No installer and no .NET install needed — FFmpeg is bundled next to the exe.
+Download **Savor.exe** from the [latest release](../../releases/latest) and run it. That's it — one file, no installer, nothing else to install.
+On first launch Savor unpacks its built-in FFmpeg to `%LOCALAPPDATA%\Savor\ffmpeg` (a second or two, once).
 
 Captures go to `Videos\Savor` by default (change it in Settings).
 
@@ -53,7 +53,7 @@ Requires the .NET 8 SDK on Windows.
 dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
 ```
 
-Put an `ffmpeg.exe` (a recent build with `ddagrab`, e.g. from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)) next to the built `Savor.exe`.
+To embed FFmpeg like the release does, gzip a recent `ffmpeg.exe` (with `ddagrab`, e.g. from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)) to `ffmpeg/ffmpeg.exe.gz` before publishing. Without it, Savor uses an `ffmpeg.exe` next to the exe or on PATH.
 Every push to `main` is built by GitHub Actions and published as the release for the version in `Savor.csproj` (bump `<Version>` for a new release).
 
 ## Notes
@@ -62,4 +62,4 @@ Every push to `main` is built by GitHub Actions and published as the release for
 - A few games in true exclusive fullscreen can't be captured by Desktop Duplication — borderless/windowed fullscreen always works.
 - Capture pauses on secure screens (UAC prompts, Ctrl+Alt+Del); turn the buffer back on afterwards.
 
-FFmpeg is licensed separately under the GPL; its license is included in the release zip as `FFMPEG-LICENSE.txt`.
+FFmpeg is licensed separately under the GPL; Savor embeds an unmodified [BtbN](https://github.com/BtbN/FFmpeg-Builds) build.

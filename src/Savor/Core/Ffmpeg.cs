@@ -32,8 +32,17 @@ public static class Ffmpeg
 {
     public static string? Path { get; private set; }
 
-    public static bool Locate()
+    const string EmbeddedName = "ffmpeg.exe.gz";
+
+    /// <summary>
+    /// Finds ffmpeg: the copy embedded in Savor.exe (unpacked once to %LOCALAPPDATA%\Savor\ffmpeg),
+    /// otherwise one next to the exe or on PATH.
+    /// </summary>
+    public static async Task<bool> EnsureAsync()
     {
+        var embedded = await Task.Run(ExtractEmbedded);
+        if (embedded != null) { Path = embedded; return true; }
+
         var baseDir = AppContext.BaseDirectory;
         var candidates = new List<string>
         {
@@ -48,6 +57,38 @@ public static class Ffmpeg
         }
         Path = candidates.FirstOrDefault(File.Exists);
         return Path != null;
+    }
+
+    public static bool HasEmbedded =>
+        typeof(Ffmpeg).Assembly.GetManifestResourceInfo(EmbeddedName) != null;
+
+    static string? ExtractEmbedded()
+    {
+        try
+        {
+            var asm = typeof(Ffmpeg).Assembly;
+            using var res = asm.GetManifestResourceStream(EmbeddedName);
+            if (res == null) return null;
+
+            // One folder per embedded build, so updating Savor also updates ffmpeg.
+            var dir = System.IO.Path.Combine(AppSettings.LocalDataDir, "ffmpeg", $"{res.Length:x}");
+            var exe = System.IO.Path.Combine(dir, "ffmpeg.exe");
+            if (File.Exists(exe)) return exe;
+
+            Directory.CreateDirectory(dir);
+            var tmp = exe + ".partial";
+            using (var gz = new System.IO.Compression.GZipStream(res, System.IO.Compression.CompressionMode.Decompress))
+            using (var fs = File.Create(tmp))
+                gz.CopyTo(fs);
+            File.Move(tmp, exe, true);
+
+            // remove older unpacked versions
+            foreach (var old in Directory.GetDirectories(System.IO.Path.GetDirectoryName(dir)!))
+                if (!string.Equals(old, dir, StringComparison.OrdinalIgnoreCase))
+                    try { Directory.Delete(old, true); } catch { }
+            return exe;
+        }
+        catch { return null; }
     }
 
     /// <summary>Identifies the ffmpeg build so cached encoder probes can be invalidated.</summary>

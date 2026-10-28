@@ -12,7 +12,7 @@
     <RootNamespace>Savor</RootNamespace>
     <ApplicationIcon>Assets\savor.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>Savor</Product>
     <Description>Lightweight screen recorder with a replay buffer</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -25,6 +25,11 @@
 
   <ItemGroup>
     <Resource Include="Assets\savor.ico" />
+  </ItemGroup>
+
+  <!-- CI drops a gzipped ffmpeg.exe here so Savor.exe ships as a single file. -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\ffmpeg\ffmpeg.exe.gz')">
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\..\ffmpeg\ffmpeg.exe.gz" LogicalName="ffmpeg.exe.gz" />
   </ItemGroup>
 
 </Project>
