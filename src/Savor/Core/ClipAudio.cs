@@ -20,7 +20,7 @@ public sealed class ClipAudio : IDisposable
 {
     static string TempDir => Path.Combine(AppSettings.LocalDataDir, "temp");
 
-    AudioFileReader? _reader;
+    Source? _reader;
     WasapiOut? _out;
     string? _file;
     float _volume = 0.8f;
@@ -84,7 +84,7 @@ public sealed class ClipAudio : IDisposable
         if (ct.IsCancellationRequested) { TryDelete(file); ct.ThrowIfCancellationRequested(); }
 
         _file = file;
-        _reader = new AudioFileReader(file) { Volume = _muted ? 0 : _volume };
+        _reader = new Source(file) { Volume = _muted ? 0 : _volume };
         _out = new WasapiOut(AudioClientShareMode.Shared, true, 40);
         _out.Init(_reader);
     }
@@ -129,6 +129,41 @@ public sealed class ClipAudio : IDisposable
         _reader = null;
         if (_file != null) TryDelete(_file);
         _file = null;
+    }
+
+    /// <summary>WAV file as float samples, with volume and thread-safe seeking while playing.</summary>
+    sealed class Source : ISampleProvider, IDisposable
+    {
+        readonly WaveFileReader _wav;
+        readonly ISampleProvider _samples;
+        readonly object _lock = new();
+        public float Volume { get; set; } = 1f;
+
+        public Source(string file)
+        {
+            _wav = new WaveFileReader(file);
+            _samples = _wav.ToSampleProvider();
+        }
+
+        public WaveFormat WaveFormat => _samples.WaveFormat;
+        public TimeSpan TotalTime => _wav.TotalTime;
+
+        public TimeSpan CurrentTime
+        {
+            get { lock (_lock) return _wav.CurrentTime; }
+            set { lock (_lock) _wav.CurrentTime = value; }
+        }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            int n;
+            lock (_lock) n = _samples.Read(buffer, offset, count);
+            float v = Volume;
+            if (v != 1f) for (int i = 0; i < n; i++) buffer[offset + i] *= v;
+            return n;
+        }
+
+        public void Dispose() => _wav.Dispose();
     }
 
     static void TryDelete(string f) { try { File.Delete(f); } catch { } }
