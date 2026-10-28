@@ -261,7 +261,9 @@ public partial class ClipEditor : UserControl
 
     void OnKey(object sender, KeyEventArgs e)
     {
-        if (e.OriginalSource is ComboBox or ComboBoxItem) return;
+        // let an open dropdown use the keys; otherwise shortcuts work wherever focus is
+        if (e.OriginalSource is ComboBoxItem || e.OriginalSource is ComboBox { IsDropDownOpen: true }) return;
+        if (e.OriginalSource is ComboBox && e.Key is Key.Up or Key.Down) return;
         bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
         switch (e.Key)
         {
