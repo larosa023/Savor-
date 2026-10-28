@@ -39,10 +39,12 @@ public partial class ClipEditor : UserControl
     public event Action<string>? Exported;
 
     public bool IsBusy => _exportCts != null;
+    readonly bool _ready;
 
     public ClipEditor()
     {
         InitializeComponent();
+        _ready = true;
         _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
         _timer.Tick += (_, _) => Tick();
         PreviewKeyDown += OnKey;
@@ -202,7 +204,7 @@ public partial class ClipEditor : UserControl
 
     void Volume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (Player == null) return;
+        if (!_ready) return;
         Player.Volume = VolumeSlider.Value;
         Player.IsMuted = VolumeSlider.Value <= 0.001;
         VolIcon.Text = Player.IsMuted ? "" : "";
@@ -356,6 +358,7 @@ public partial class ClipEditor : UserControl
 
     void CropPreset_Checked(object sender, RoutedEventArgs e)
     {
+        if (!_ready) return; // fires once while the XAML is still loading
         if (sender is RadioButton { Tag: string tag }) SetCropMode(tag);
     }
 
