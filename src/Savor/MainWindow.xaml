@@ -299,8 +299,12 @@
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <Grid Height="8">
                                         <Border CornerRadius="3" Background="{StaticResource MeterBrush}"/>
-                                        <Border x:Name="DeskMask" CornerRadius="0,3,3,0" Background="#E61E1F23" HorizontalAlignment="Right"/>
-                                        <Border x:Name="DeskPeak" Width="2" Background="White" Opacity="0.8" HorizontalAlignment="Left"/>
+                                        <Border x:Name="DeskMask" CornerRadius="0,3,3,0" Background="#E61E1F23" RenderTransformOrigin="1,0.5">
+                                            <Border.RenderTransform><ScaleTransform x:Name="DeskMaskScale" ScaleX="1"/></Border.RenderTransform>
+                                        </Border>
+                                        <Border x:Name="DeskPeak" Width="2" Background="White" Opacity="0.85" HorizontalAlignment="Left">
+                                            <Border.RenderTransform><TranslateTransform x:Name="DeskPeakX" X="0"/></Border.RenderTransform>
+                                        </Border>
                                     </Grid>
                                     <Slider x:Name="DeskVol" Minimum="0" Maximum="200" Margin="0,4,0,0" ValueChanged="TrackVolume_Changed"/>
                                 </StackPanel>
@@ -329,8 +333,12 @@
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <Grid Height="8">
                                         <Border CornerRadius="3" Background="{StaticResource MeterBrush}"/>
-                                        <Border x:Name="MicMask" CornerRadius="0,3,3,0" Background="#E61E1F23" HorizontalAlignment="Right"/>
-                                        <Border x:Name="MicPeak" Width="2" Background="White" Opacity="0.8" HorizontalAlignment="Left"/>
+                                        <Border x:Name="MicMask" CornerRadius="0,3,3,0" Background="#E61E1F23" RenderTransformOrigin="1,0.5">
+                                            <Border.RenderTransform><ScaleTransform x:Name="MicMaskScale" ScaleX="1"/></Border.RenderTransform>
+                                        </Border>
+                                        <Border x:Name="MicPeak" Width="2" Background="White" Opacity="0.85" HorizontalAlignment="Left">
+                                            <Border.RenderTransform><TranslateTransform x:Name="MicPeakX" X="0"/></Border.RenderTransform>
+                                        </Border>
                                     </Grid>
                                     <Slider x:Name="MicVol" Minimum="0" Maximum="200" Margin="0,4,0,0" ValueChanged="TrackVolume_Changed"/>
                                 </StackPanel>

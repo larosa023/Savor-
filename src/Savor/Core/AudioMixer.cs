@@ -46,6 +46,11 @@ public sealed class AudioMixer : IDisposable
     /// <summary>Peak levels 0..1, updated per audio packet (read from UI for meters).</summary>
     public volatile float DesktopLevel;
     public volatile float MicLevel;
+    // highest peak since the UI last looked, so short transients are never missed between frames
+    volatile float _deskMax, _micMax;
+
+    public float TakeDesktopPeak() { var v = _deskMax; _deskMax = 0; return Math.Max(v, DesktopLevel); }
+    public float TakeMicPeak() { var v = _micMax; _micMax = 0; return Math.Max(v, MicLevel); }
 
     public event Action<byte[], int>? DataAvailable;
 
@@ -152,6 +157,8 @@ public sealed class AudioMixer : IDisposable
         }
         DesktopLevel = Math.Min(1f, dPeak);
         MicLevel = Math.Min(1f, mPeak);
+        if (DesktopLevel > _deskMax) _deskMax = DesktopLevel;
+        if (MicLevel > _micMax) _micMax = MicLevel;
 
         int bytes = n * 4;
         if (_outBytes.Length < bytes) _outBytes = new byte[bytes];

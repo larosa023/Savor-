@@ -119,6 +119,7 @@ public partial class MainWindow : Window
         ReloadClips();
         RefreshState();
         _uiTimer.Start();
+        if (!_renderHooked) { CompositionTarget.Rendering += OnRendering; _renderHooked = true; }
 
         CaptureInfo.Text = "Getting ready…";
         if (!await Ffmpeg.EnsureAsync())
@@ -324,27 +325,49 @@ public partial class MainWindow : Window
         UpdateMonitor(shown);
         if (!shown) return;
 
-        var mixer = _engine.IsRunning && _engine.Mixer != null ? _engine.Mixer : _monitor;
-        UpdateMeter(DeskMask, DeskPeak, mixer?.DesktopLevel ?? 0, ref _deskLevel, ref _deskPeak, ref _deskPeakAt);
-        UpdateMeter(MicMask, MicPeak, mixer?.MicLevel ?? 0, ref _micLevel, ref _micPeak, ref _micPeakAt);
+        if (_settingsDirty && (DateTime.UtcNow - _settingsDirtyAt).TotalMilliseconds > 400)
+        {
+            _settingsDirty = false;
+            _settings.Save();
+        }
 
         if ((DateTime.UtcNow - _lastStatus).TotalSeconds >= 1) UpdateStatus();
     }
 
-    static void UpdateMeter(Border mask, Border peakTick, float level, ref double cur, ref double peak, ref DateTime peakAt)
+    bool _settingsDirty;
+    DateTime _settingsDirtyAt;
+    DateTime _lastMeterFrame = DateTime.UtcNow;
+
+    /// <summary>Saves settings shortly after the last change instead of on every slider tick.</summary>
+    void SaveSoon()
     {
-        // map -60..0 dBFS onto the bar
+        _settingsDirty = true;
+        _settingsDirtyAt = DateTime.UtcNow;
+    }
+
+    void UpdateMeters()
+    {
+        var now = DateTime.UtcNow;
+        double dt = Math.Clamp((now - _lastMeterFrame).TotalSeconds, 0, 0.1);
+        _lastMeterFrame = now;
+        var mixer = _engine.IsRunning && _engine.Mixer != null ? _engine.Mixer : _monitor;
+        UpdateMeter(DeskMaskScale, DeskPeakX, DeskMask, mixer?.TakeDesktopPeak() ?? 0, dt, now, ref _deskLevel, ref _deskPeak, ref _deskPeakAt);
+        UpdateMeter(MicMaskScale, MicPeakX, MicMask, mixer?.TakeMicPeak() ?? 0, dt, now, ref _micLevel, ref _micPeak, ref _micPeakAt);
+    }
+
+    static void UpdateMeter(ScaleTransform mask, TranslateTransform peakX, FrameworkElement host, float level, double dt, DateTime now,
+                            ref double cur, ref double peak, ref DateTime peakAt)
+    {
+        // map -60..0 dBFS onto the bar; instant attack, ~25 dB/s release (like OBS)
         double db = level > 0.000001 ? 20 * Math.Log10(level) : -100;
         double target = Math.Clamp((db + 60) / 60, 0, 1);
-        cur = target > cur ? target : Math.Max(target, cur - 0.03); // fast attack, smooth release
-        if (cur >= peak) { peak = cur; peakAt = DateTime.UtcNow; }
-        else if ((DateTime.UtcNow - peakAt).TotalSeconds > 1.2) peak = Math.Max(cur, peak - 0.015);
+        cur = target >= cur ? target : Math.Max(target, cur - dt * 0.42);
+        if (cur >= peak) { peak = cur; peakAt = now; }
+        else if ((now - peakAt).TotalSeconds > 1.5) peak = Math.Max(cur, peak - dt * 0.35);
 
-        if (mask.Parent is not FrameworkElement host) return;
         double w = host.ActualWidth;
-        mask.Width = Math.Max(0, (1 - cur) * w);
-        peakTick.Margin = new Thickness(Math.Max(0, peak * w - 2), 0, 0, 0);
-        peakTick.Visibility = peak > 0.01 ? Visibility.Visible : Visibility.Hidden;
+        mask.ScaleX = 1 - cur;                        // transforms only: no layout pass per frame
+        peakX.X = Math.Max(0, peak * w - 2);
     }
 
     // ----- live preview -----
@@ -413,6 +436,7 @@ public partial class MainWindow : Window
     /// <summary>Runs once per screen refresh; pushes the newest preview frame, if any.</summary>
     void OnRendering(object? sender, EventArgs e)
     {
+        if (IsVisible && WindowState != WindowState.Minimized) UpdateMeters();
         if (!_previewWanted) return;
         var bmp = _previewBitmap;
         if (bmp == null) return;
@@ -571,21 +595,21 @@ public partial class MainWindow : Window
         if (_loadingUi || DeskDb == null || MicDb == null) return;
         _settings.DesktopVolume = DeskVol.Value / 100;
         _settings.MicVolume = MicVol.Value / 100;
-        _settings.Save();
+        SaveSoon();
         ApplyLiveAudio();
     }
 
     void DeskMute_Click(object sender, RoutedEventArgs e)
     {
         _settings.DesktopMuted = !_settings.DesktopMuted;
-        _settings.Save();
+        SaveSoon();
         ApplyLiveAudio();
     }
 
     void MicMute_Click(object sender, RoutedEventArgs e)
     {
         _settings.MicMuted = !_settings.MicMuted;
-        _settings.Save();
+        SaveSoon();
         ApplyLiveAudio();
     }
 
@@ -920,7 +944,7 @@ public partial class MainWindow : Window
         DesktopVolumeValue.Text = $"{DesktopVolumeSlider.Value:0}%";
         MicVolumeValue.Text = $"{MicVolumeSlider.Value:0}%";
         // volume applies live, no restart needed
-        _settings.Save();
+        SaveSoon();
         ApplyLiveAudio();
     }
 
@@ -929,7 +953,7 @@ public partial class MainWindow : Window
         if (_loadingUi || ReplayValue == null) return;
         _settings.ReplaySeconds = (int)ReplaySlider.Value;
         ReplayValue.Text = FormatShort(_settings.ReplaySeconds);
-        _settings.Save();
+        SaveSoon();
         RefreshState();
     }
 
@@ -1066,6 +1090,7 @@ public partial class MainWindow : Window
         if (_exiting) return;
         _exiting = true;
         _uiTimer.Stop();
+        _settings.Save();
         _preview.Stop();
         try { _monitor?.Dispose(); } catch { }
         _monitor = null;
