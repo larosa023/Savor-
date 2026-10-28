@@ -114,6 +114,9 @@ jobs:
           $line3 = "Editor open: private working set $(Mb $pws) MB, private bytes $(Mb $p.PrivateMemorySize64) MB"
           Write-Host "::notice::$line3"
           $line3 | Out-File diag.txt -Append
+          "clip exists: $(Test-Path $clip)" | Out-File diag.txt -Append
+          $log = "$env:LOCALAPPDATA\Savor\errors.log"
+          if (Test-Path $log) { Get-Content $log | Out-File diag.txt -Append; Write-Host "::warning::errors.log present" }
           $g = [System.Drawing.Graphics]::FromImage($bmp)
           $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $bmp.Save("editor.png", [System.Drawing.Imaging.ImageFormat]::Png)

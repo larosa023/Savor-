@@ -59,6 +59,13 @@ public partial class App : Application
 
     void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        try
+        {
+            var dir = Savor.Core.AppSettings.LocalDataDir;
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "errors.log"), $"{DateTime.Now:u} Unhandled: {e.Exception}\n\n");
+        }
+        catch { }
         MessageBox.Show(e.Exception.Message, "Savor", MessageBoxButton.OK, MessageBoxImage.Warning);
         e.Handled = true;
     }

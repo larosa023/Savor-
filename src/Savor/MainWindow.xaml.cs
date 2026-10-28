@@ -142,9 +142,8 @@ public partial class MainWindow : Window
         _updateTimer.Start();
         _ = CheckForUpdatesAsync(userInitiated: false);
 
-        if (_editOnStart != null) OpenEditor(_editOnStart);
-
         await DetectEncodersAsync(force: false);
+        if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
 
         if (_settings.StartBufferOnLaunch && _engine.Encoder != null)
             await ToggleBufferAsync(forceOn: true);
@@ -725,6 +724,27 @@ public partial class MainWindow : Window
     ClipEditor? _editor;
 
     public void OpenEditor(string path)
+    {
+        try { OpenEditorCore(path); }
+        catch (Exception ex)
+        {
+            LogError("Open editor", ex);
+            ShowError("Couldn't open the clip: " + ex.Message);
+            try { CloseEditor(); } catch { }
+        }
+    }
+
+    static void LogError(string where, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppSettings.LocalDataDir);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "errors.log"), $"{DateTime.Now:u} {where}: {ex}\n\n");
+        }
+        catch { }
+    }
+
+    void OpenEditorCore(string path)
     {
         if (!File.Exists(path)) { Notify("File not found", Path.GetFileName(path), error: true); return; }
         if (_editor == null)
