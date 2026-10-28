@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
@@ -37,16 +39,54 @@ public sealed class AudioMixer : IDisposable
     byte[] _outBytes = Array.Empty<byte>();
 
     /// <summary>
-    /// When true and both sources are on, output is 3 stereo tracks interleaved as 6 channels:
-    /// [mix L, mix R, desktop L, desktop R, mic L, mic R]. Otherwise a single stereo mix.
+    /// When true, output is several stereo tracks interleaved: track 1 = mix, then desktop audio,
+    /// microphone and one track per chosen app (only the ones that are on). Otherwise a single stereo mix.
     /// Fixed for the life of the mixer (ffmpeg's input layout depends on it).
     /// </summary>
     public bool SeparateTracks { get; init; }
     public int OutputChannels => TrackNames.Count * 2;
-    public IReadOnlyList<string> TrackNames =>
-        SeparateTracks && DesktopEnabled && _mic != null
-            ? new[] { "Mix", "Desktop audio", "Microphone" }
-            : new[] { "Mix" };
+
+    string[]? _trackNames;
+    int _deskTrack = -1, _micTrack = -1;
+
+    public IReadOnlyList<string> TrackNames
+    {
+        get
+        {
+            if (_trackNames != null) return _trackNames;
+            var names = new List<string> { "Mix" };
+            int sources = (DesktopEnabled ? 1 : 0) + (_mic != null ? 1 : 0) + _apps.Count;
+            if (SeparateTracks && (sources >= 2 || _apps.Count > 0))
+            {
+                if (DesktopEnabled) { _deskTrack = names.Count; names.Add("Desktop audio"); }
+                if (_mic != null) { _micTrack = names.Count; names.Add("Microphone"); }
+                foreach (var a in _apps) { a.TrackIndex = names.Count; names.Add(a.Name); }
+            }
+            return _trackNames = names.ToArray();
+        }
+    }
+
+    // ---- per-application tracks ----
+    public sealed class AppTrack
+    {
+        public required string Exe { get; init; }
+        public required string Name { get; init; }
+        public float Volume { get; set; } = 1f;
+        public bool Muted { get; set; }
+        public int TrackIndex { get; internal set; } = -1;
+        public bool Live => Capture?.IsAlive == true;
+        public volatile float Level;
+        internal volatile float Max;
+        internal FloatRing Ring = null!;
+        internal ProcessAudioCapture? Capture;
+        internal float[] Buf = Array.Empty<float>();
+        public float TakePeak() { var v = Max; Max = 0; return Math.Max(v, Level); }
+    }
+
+    readonly List<AppTrack> _apps = new();
+    public IReadOnlyList<AppTrack> Apps => _apps;
+    Timer? _appWatcher;
+    int _attaching;
 
     public int SampleRate { get; }
     public bool DesktopEnabled { get; set; }
@@ -67,7 +107,8 @@ public sealed class AudioMixer : IDisposable
 
     public event Action<byte[], int>? DataAvailable;
 
-    public AudioMixer(bool desktopEnabled, double desktopVolume, string? micId, double micVolume)
+    public AudioMixer(bool desktopEnabled, double desktopVolume, string? micId, double micVolume,
+                      IEnumerable<AppAudioSetting>? apps = null)
     {
         DesktopEnabled = desktopEnabled;
         DesktopVolume = (float)desktopVolume;
@@ -115,6 +156,52 @@ public sealed class AudioMixer : IDisposable
                 _micSamples = null;
             }
         }
+
+        if (apps != null && ProcessAudioCapture.IsSupported)
+        {
+            foreach (var a in apps.Take(5))
+            {
+                _apps.Add(new AppTrack
+                {
+                    Exe = a.Exe,
+                    Name = string.IsNullOrWhiteSpace(a.Name) ? a.Exe : a.Name,
+                    Volume = (float)a.Volume,
+                    Muted = a.Muted,
+                    Ring = new FloatRing(SampleRate, 2),
+                });
+            }
+        }
+    }
+
+    /// <summary>Attaches to chosen apps that are running; retried every few seconds so apps opened later get picked up.</summary>
+    void AttachApps()
+    {
+        if (Interlocked.Exchange(ref _attaching, 1) == 1) return;
+        try
+        {
+            foreach (var a in _apps)
+            {
+                if (a.Live) continue;
+                try { a.Capture?.Dispose(); } catch { }
+                a.Capture = null;
+                var pid = ProcessAudioCapture.FindRootProcess(a.Exe);
+                if (pid == null) continue;
+                try
+                {
+                    var cap = ProcessAudioCapture.StartAsync(pid.Value, SampleRate).GetAwaiter().GetResult();
+                    var ring = a.Ring;
+                    cap.DataAvailable += (buf, n) =>
+                    {
+                        // keep latency bounded if this stream runs ahead of the desktop clock
+                        if (ring.Count > SampleRate * 2 / 4) ring.Clear();
+                        ring.Write(buf, n);
+                    };
+                    a.Capture = cap;
+                }
+                catch { }
+            }
+        }
+        finally { Interlocked.Exchange(ref _attaching, 0); }
     }
 
     public void Start()
@@ -122,6 +209,8 @@ public sealed class AudioMixer : IDisposable
         _keepAlive?.Play();
         _loopback.StartRecording();
         _mic?.StartRecording();
+        if (_apps.Count > 0)
+            _appWatcher = new Timer(_ => AttachApps(), null, 0, 3000);
     }
 
     public void Stop()
@@ -129,6 +218,14 @@ public sealed class AudioMixer : IDisposable
         try { _loopback.StopRecording(); } catch { }
         try { _mic?.StopRecording(); } catch { }
         try { _keepAlive?.Stop(); } catch { }
+        _appWatcher?.Dispose();
+        _appWatcher = null;
+        foreach (var a in _apps)
+        {
+            try { a.Capture?.Dispose(); } catch { }
+            a.Capture = null;
+            a.Level = 0;
+        }
         DesktopLevel = 0;
         MicLevel = 0;
     }
@@ -161,6 +258,26 @@ public sealed class AudioMixer : IDisposable
         int ch = OutputChannels;
         int outN = frames * ch;
         if (_out.Length < outN) _out = new float[outN];
+        Array.Clear(_out, 0, outN);
+
+        // per-app streams (same sample rate; padded with silence if an app is quiet or closed)
+        foreach (var a in _apps)
+        {
+            if (a.Buf.Length < n) a.Buf = new float[n];
+            a.Ring.Read(a.Buf, 0, n);
+            float av = a.Muted ? 0f : a.Volume, aPeak = 0;
+            for (int i = 0; i < n; i++)
+            {
+                float v = a.Buf[i] * av;
+                a.Buf[i] = v;
+                float abs = Math.Abs(v);
+                if (abs > aPeak) aPeak = abs;
+                if (a.TrackIndex > 0) _out[(i >> 1) * ch + a.TrackIndex * 2 + (i & 1)] = Clip(v);
+            }
+            a.Level = Math.Min(1f, aPeak);
+            if (a.Level > a.Max) a.Max = a.Level;
+        }
+
         for (int i = 0; i < n; i++)
         {
             float d = _desk[i] * dv;
@@ -169,12 +286,11 @@ public sealed class AudioMixer : IDisposable
             if (ad > dPeak) dPeak = ad;
             if (am > mPeak) mPeak = am;
             int frame = i >> 1, side = i & 1, o = frame * ch + side;
-            _out[o] = Clip(d + m);
-            if (ch == 6)
-            {
-                _out[o + 2] = Clip(d);
-                _out[o + 4] = Clip(m);
-            }
+            // desktop audio already contains every app; with desktop off, the mix is built from the chosen apps
+            float baseMix = DesktopEnabled ? d : SumApps(i);
+            _out[o] = Clip(baseMix + m);
+            if (_deskTrack > 0) _out[o + _deskTrack * 2] = Clip(d);
+            if (_micTrack > 0) _out[o + _micTrack * 2] = Clip(m);
         }
         DesktopLevel = Math.Min(1f, dPeak);
         MicLevel = Math.Min(1f, mPeak);
@@ -188,6 +304,13 @@ public sealed class AudioMixer : IDisposable
     }
 
     static float Clip(float s) => s > 1f ? 1f : (s < -1f ? -1f : s);
+
+    float SumApps(int i)
+    {
+        float s = 0;
+        foreach (var a in _apps) s += a.Buf[i];
+        return s;
+    }
 
     static bool IsFloat(WaveFormat f) =>
         f.Encoding == WaveFormatEncoding.IeeeFloat ||
@@ -278,7 +401,7 @@ public sealed class AudioMixer : IDisposable
     }
 
     /// <summary>Thread-safe float ring buffer exposed as a sample provider that pads with silence.</summary>
-    sealed class FloatRing : ISampleProvider
+    internal sealed class FloatRing : ISampleProvider
     {
         readonly float[] _buf;
         int _read, _write, _count;

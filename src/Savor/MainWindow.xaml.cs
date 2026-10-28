@@ -148,6 +148,8 @@ public partial class MainWindow : Window
         _updateTimer.Start();
         _ = CheckForUpdatesAsync(userInitiated: false);
 
+        if (Environment.GetEnvironmentVariable("SAVOR_SELFTEST_AUDIO") == "1") _ = SelfTestAppAudioAsync();
+
         await DetectEncodersAsync(force: false);
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
         if (_editOnStart != null && Environment.GetEnvironmentVariable("SAVOR_SELFTEST") == "1")
@@ -367,6 +369,11 @@ public partial class MainWindow : Window
         var mixer = _engine.IsRunning && _engine.Mixer != null ? _engine.Mixer : _monitor;
         UpdateMeter(DeskMaskScale, DeskPeakX, DeskMask, mixer?.TakeDesktopPeak() ?? 0, dt, now, ref _deskLevel, ref _deskPeak, ref _deskPeakAt);
         UpdateMeter(MicMaskScale, MicPeakX, MicMask, mixer?.TakeMicPeak() ?? 0, dt, now, ref _micLevel, ref _micPeak, ref _micPeakAt);
+        foreach (var r in _appRows)
+        {
+            var live = mixer?.Apps.FirstOrDefault(a => a.Exe.Equals(r.S.Exe, StringComparison.OrdinalIgnoreCase));
+            UpdateMeter(r.MaskScale, r.PeakX, r.Mask, live?.TakePeak() ?? 0, dt, now, ref r.Level, ref r.Peak, ref r.PeakAt);
+        }
     }
 
     static void UpdateMeter(ScaleTransform mask, TranslateTransform peakX, FrameworkElement host, float level, double dt, DateTime now,
@@ -478,9 +485,10 @@ public partial class MainWindow : Window
 
     void UpdateMonitor(bool shown)
     {
-        bool anyAudio = _settings.DesktopAudio || !string.IsNullOrEmpty(_settings.MicDeviceId);
+        bool anyAudio = _settings.DesktopAudio || !string.IsNullOrEmpty(_settings.MicDeviceId) || _settings.AppTracks.Count > 0;
         bool want = shown && !_engine.IsRunning && anyAudio;
-        string key = $"{_settings.DesktopAudio}|{_settings.MicDeviceId}";
+        string key = $"{_settings.DesktopAudio}|{_settings.MicDeviceId}|{_settings.SeparateAudioTracks}|" +
+                     string.Join(",", _settings.AppTracks.Select(a => a.Exe));
         if (!want || key != _monitorKey)
         {
             if (_monitor != null)
@@ -495,8 +503,10 @@ public partial class MainWindow : Window
             _lastMonitorTry = DateTime.UtcNow;
             try
             {
-                _monitor = new AudioMixer(_settings.DesktopAudio, _settings.DesktopVolume, _settings.MicDeviceId, _settings.MicVolume)
+                _monitor = new AudioMixer(_settings.DesktopAudio, _settings.DesktopVolume, _settings.MicDeviceId, _settings.MicVolume,
+                                          _settings.SeparateAudioTracks ? _settings.AppTracks : null)
                 {
+                    SeparateTracks = _settings.SeparateAudioTracks,
                     DesktopMuted = _settings.DesktopMuted,
                     MicMuted = _settings.MicMuted,
                 };
@@ -515,6 +525,7 @@ public partial class MainWindow : Window
 
     void UpdateStatus()
     {
+        UpdateAppStatus();
         _lastStatus = DateTime.UtcNow;
         var cpuNow = _engine.CpuTime + _preview.CpuTime;
         try { cpuNow += Process.GetCurrentProcess().TotalProcessorTime; } catch { }
@@ -540,6 +551,179 @@ public partial class MainWindow : Window
     }
 
     // ----- studio panels -----
+
+    // ===================== app audio tracks =====================
+
+    sealed class AppRow
+    {
+        public required AppAudioSetting S;
+        public required Border Mask, Chip;
+        public required ScaleTransform MaskScale;
+        public required TranslateTransform PeakX;
+        public required TextBlock Db, Status, ChipText, MuteIcon;
+        public double Level, Peak;
+        public DateTime PeakAt;
+    }
+
+    readonly List<AppRow> _appRows = new();
+
+    void BuildAppRows()
+    {
+        AppRows.Children.Clear();
+        _appRows.Clear();
+        if (!_settings.SeparateAudioTracks || !ProcessAudioCapture.IsSupported) return;
+        foreach (var app in _settings.AppTracks.Take(5))
+        {
+            var cfg = app;
+            var grid = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var chipText = new TextBlock { FontSize = 10, FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("MutedBrush") };
+            var chip = new Border { Style = (Style)FindResource("Chip"), Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(6, 1, 6, 1), Child = chipText };
+            var title = new StackPanel { Orientation = Orientation.Horizontal };
+            title.Children.Add(new TextBlock { Text = string.IsNullOrWhiteSpace(cfg.Name) ? cfg.Exe : cfg.Name, FontWeight = FontWeights.SemiBold,
+                                               TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 100 });
+            title.Children.Add(chip);
+            var status = new TextBlock { Foreground = (Brush)FindResource("FaintBrush"), FontSize = 11, Margin = new Thickness(0, 2, 0, 0),
+                                         TextTrimming = TextTrimming.CharacterEllipsis, Text = cfg.Exe };
+            var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+            left.Children.Add(title);
+            left.Children.Add(status);
+            grid.Children.Add(left);
+
+            var maskScale = new ScaleTransform(1, 1);
+            var mask = new Border { CornerRadius = new CornerRadius(0, 3, 3, 0), Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x1E, 0x1F, 0x23)),
+                                    RenderTransformOrigin = new Point(1, 0.5), RenderTransform = maskScale };
+            var peakX = new TranslateTransform();
+            var peak = new Border { Width = 2, Background = Brushes.White, Opacity = 0.85, HorizontalAlignment = HorizontalAlignment.Left, RenderTransform = peakX };
+            var meter = new Grid { Height = 8 };
+            meter.Children.Add(new Border { CornerRadius = new CornerRadius(3), Background = (Brush)FindResource("MeterBrush") });
+            meter.Children.Add(mask);
+            meter.Children.Add(peak);
+            var vol = new Slider { Minimum = 0, Maximum = 200, Value = cfg.Volume * 100, Margin = new Thickness(0, 4, 0, 0) };
+            var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            mid.Children.Add(meter);
+            mid.Children.Add(vol);
+            Grid.SetColumn(mid, 1);
+            grid.Children.Add(mid);
+
+            var db = new TextBlock { Width = 62, TextAlignment = TextAlignment.Right, FontSize = 12, Foreground = (Brush)FindResource("MutedBrush"),
+                                     VerticalAlignment = VerticalAlignment.Center };
+            var muteIcon = new TextBlock { Style = (Style)FindResource("Icon"), Text = "\uE767", FontSize = 14 };
+            var mute = new Button { Style = (Style)FindResource("GhostButton"), Padding = new Thickness(9, 6, 9, 6), Margin = new Thickness(6, 0, 0, 0),
+                                    Content = muteIcon, ToolTip = "Mute this app's track" };
+            var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+            right.Children.Add(db);
+            right.Children.Add(mute);
+            Grid.SetColumn(right, 2);
+            grid.Children.Add(right);
+
+            vol.ValueChanged += (_, _) => { cfg.Volume = vol.Value / 100; SaveSoon(); ApplyLiveAudio(); };
+            mute.Click += (_, _) => { cfg.Muted = !cfg.Muted; SaveSoon(); ApplyLiveAudio(); };
+
+            _appRows.Add(new AppRow { S = cfg, Mask = mask, MaskScale = maskScale, PeakX = peakX, Db = db, Status = status,
+                                      Chip = chip, ChipText = chipText, MuteIcon = muteIcon });
+            AppRows.Children.Add(grid);
+        }
+    }
+
+    /// <summary>Shows whether each app track is currently hearing its app (1×/s).</summary>
+    void UpdateAppStatus()
+    {
+        var mixer = _engine.IsRunning && _engine.Mixer != null ? _engine.Mixer : _monitor;
+        foreach (var r in _appRows)
+        {
+            var live = mixer?.Apps.FirstOrDefault(a => a.Exe.Equals(r.S.Exe, StringComparison.OrdinalIgnoreCase));
+            r.Status.Text = live?.Live == true ? $"{r.S.Exe} · listening" : $"{r.S.Exe} · not running";
+        }
+    }
+
+    void RefreshAppTracksList()
+    {
+        AppTracksList.Children.Clear();
+        bool supported = ProcessAudioCapture.IsSupported;
+        AddAppCombo.IsEnabled = supported && _settings.SeparateAudioTracks && _settings.AppTracks.Count < 5;
+        AppTracksDesc.Text = !supported
+            ? "Needs Windows 10 version 2004 or newer."
+            : !_settings.SeparateAudioTracks
+                ? "Turn on Separate audio tracks above to give apps their own tracks."
+                : "Give apps like your game, Discord or Spotify their own track (up to 5). Desktop audio still records everything; leave this empty to keep just desktop audio.";
+        AddAppCombo.Items.Clear();
+        AddAppCombo.Items.Add(new ComboBoxItem { Content = "Add an app…", Tag = "", IsEnabled = false });
+        bool wasLoading = _loadingUi;
+        _loadingUi = true;
+        AddAppCombo.SelectedIndex = 0;
+        _loadingUi = wasLoading;
+
+        foreach (var app in _settings.AppTracks)
+        {
+            var cfg = app;
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var remove = new Button { Style = (Style)FindResource("GhostButton"), Padding = new Thickness(9, 5, 9, 5), ToolTip = "Remove",
+                                      Content = new TextBlock { Style = (Style)FindResource("Icon"), Text = "\uE711", FontSize = 11 } };
+            remove.Click += (_, _) =>
+            {
+                _settings.AppTracks.Remove(cfg);
+                _settings.Save();
+                _captureDirty = true;
+                RefreshAppTracksList();
+            };
+            DockPanel.SetDock(remove, Dock.Right);
+            row.Children.Add(remove);
+            var label = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            label.Children.Add(new TextBlock { Style = (Style)FindResource("Icon"), Text = "\uE8A9", FontSize = 13,
+                                               Foreground = (Brush)FindResource("MutedBrush"), Margin = new Thickness(0, 0, 10, 0) });
+            label.Children.Add(new TextBlock { Text = string.IsNullOrWhiteSpace(cfg.Name) ? cfg.Exe : cfg.Name, FontSize = 13 });
+            label.Children.Add(new TextBlock { Text = "  " + cfg.Exe, FontSize = 11.5, Foreground = (Brush)FindResource("FaintBrush"),
+                                               VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(label);
+            AppTracksList.Children.Add(row);
+        }
+    }
+
+    void AddAppCombo_Opened(object? sender, EventArgs e)
+    {
+        bool wasLoading = _loadingUi;
+        _loadingUi = true;
+        try
+        {
+            while (AddAppCombo.Items.Count > 1) AddAppCombo.Items.RemoveAt(1);
+            var have = new HashSet<string>(_settings.AppTracks.Select(a => a.Exe), StringComparer.OrdinalIgnoreCase);
+            var playing = ProcessAudioCapture.AppsWithAudio().Where(a => !have.Contains(a.Exe)).ToList();
+            foreach (var (exe, title) in playing)
+                AddAppCombo.Items.Add(new ComboBoxItem { Content = $"{title}  ·  playing sound", Tag = exe + "|" + title });
+            foreach (var (exe, title) in ProcessAudioCapture.AppsWithWindows())
+            {
+                if (have.Contains(exe) || playing.Any(p => p.Exe.Equals(exe, StringComparison.OrdinalIgnoreCase))) continue;
+                AddAppCombo.Items.Add(new ComboBoxItem { Content = title, Tag = exe + "|" + title });
+            }
+            if (AddAppCombo.Items.Count == 1)
+                AddAppCombo.Items.Add(new ComboBoxItem { Content = "No apps found — open the app first", IsEnabled = false, Tag = "" });
+        }
+        finally { _loadingUi = wasLoading; }
+    }
+
+    void AddAppCombo_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi) return;
+        if (AddAppCombo.SelectedItem is not ComboBoxItem { Tag: string tag } || string.IsNullOrEmpty(tag)) return;
+        var parts = tag.Split('|', 2);
+        if (_settings.AppTracks.Count < 5 && !_settings.AppTracks.Any(a => a.Exe.Equals(parts[0], StringComparison.OrdinalIgnoreCase)))
+        {
+            _settings.AppTracks.Add(new AppAudioSetting { Exe = parts[0], Name = parts.Length > 1 ? parts[1] : parts[0] });
+            _settings.Save();
+            _captureDirty = true;
+        }
+        Dispatcher.BeginInvoke(RefreshAppTracksList, DispatcherPriority.Background);
+    }
+
+    void ManageApps_Click(object sender, RoutedEventArgs e)
+    {
+        Settings_Click(sender, e);
+        Dispatcher.BeginInvoke(() => AppTracksSection.BringIntoView(), DispatcherPriority.Loaded);
+    }
 
     void LoadStudioUi()
     {
@@ -570,6 +754,11 @@ public partial class MainWindow : Window
                 "default" => AudioMixer.DefaultMicName(),
                 var id => mics.FirstOrDefault(m => m.Id == id)?.Name ?? "Unavailable"
             };
+            BuildAppRows();
+            SourceAppsText.Text = !ProcessAudioCapture.IsSupported ? "Needs Windows 10 version 2004 or newer"
+                : _settings.AppTracks.Count == 0 ? "Just desktop audio — add apps for separate tracks"
+                : !_settings.SeparateAudioTracks ? "Separate tracks is off in Settings → Audio"
+                : string.Join(", ", _settings.AppTracks.Select(a => string.IsNullOrWhiteSpace(a.Name) ? a.Exe : a.Name));
             PreviewEyeIcon.Text = _settings.ShowPreview ? "\uE7B3" : "\uED1A";
             UpdateTrackLabels();
         }
@@ -586,15 +775,43 @@ public partial class MainWindow : Window
         MicMuteIcon.Foreground = (Brush)FindResource(_settings.MicMuted ? "RecBrush" : "TextBrush");
         DeskVol.IsEnabled = _settings.DesktopAudio;
         MicVol.IsEnabled = !string.IsNullOrEmpty(_settings.MicDeviceId);
-        bool both = _settings.DesktopAudio && !string.IsNullOrEmpty(_settings.MicDeviceId);
-        var live = _engine.IsRunning ? _engine.TrackNames : null;
-        bool split = live != null ? live.Count > 1 : both && _settings.SeparateAudioTracks;
-        DeskTrackChip.Visibility = MicTrackChip.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
-        DeskTrackChipText.Text = "TRACK 2";
-        MicTrackChipText.Text = "TRACK 3";
-        int count = live?.Count ?? (split ? 3 : (_settings.DesktopAudio || !string.IsNullOrEmpty(_settings.MicDeviceId) ? 1 : 0));
+        var layout = _engine.IsRunning && _engine.TrackNames.Count > 0 ? _engine.TrackNames.ToList() : ExpectedTracks();
+        SetChip(DeskTrackChip, DeskTrackChipText, layout.IndexOf("Desktop audio"));
+        SetChip(MicTrackChip, MicTrackChipText, layout.IndexOf("Microphone"));
+        foreach (var r in _appRows)
+        {
+            int idx = layout.IndexOf(string.IsNullOrWhiteSpace(r.S.Name) ? r.S.Exe : r.S.Name);
+            SetChip(r.Chip, r.ChipText, idx);
+            r.Db.Text = r.S.Muted ? "Muted" : VolumeDb(r.S.Volume);
+            r.MuteIcon.Text = r.S.Muted ? "\uE74F" : "\uE767";
+            r.MuteIcon.Foreground = (Brush)FindResource(r.S.Muted ? "RecBrush" : "TextBrush");
+        }
+        int count = layout.Count;
+        if (count == 1 && !_settings.DesktopAudio && string.IsNullOrEmpty(_settings.MicDeviceId) && _settings.AppTracks.Count == 0) count = 0;
         string tracks = count switch { 0 => "No audio", 1 => "1 audio track", _ => $"{count} tracks · 1 = mix" };
         MixerNote.Text = _engine.IsRunning ? tracks : $"{tracks}  ·  monitoring, not capturing";
+    }
+
+    static void SetChip(Border chip, TextBlock text, int index)
+    {
+        chip.Visibility = index > 0 ? Visibility.Visible : Visibility.Collapsed;
+        text.Text = $"TRACK {index + 1}";
+    }
+
+    /// <summary>The audio tracks a capture would have with the current settings (mirrors AudioMixer).</summary>
+    List<string> ExpectedTracks()
+    {
+        var names = new List<string> { "Mix" };
+        bool mic = !string.IsNullOrEmpty(_settings.MicDeviceId);
+        var apps = _settings.SeparateAudioTracks && ProcessAudioCapture.IsSupported ? _settings.AppTracks.Take(5).ToList() : new();
+        int sources = (_settings.DesktopAudio ? 1 : 0) + (mic ? 1 : 0) + apps.Count;
+        if (_settings.SeparateAudioTracks && (sources >= 2 || apps.Count > 0))
+        {
+            if (_settings.DesktopAudio) names.Add("Desktop audio");
+            if (mic) names.Add("Microphone");
+            names.AddRange(apps.Select(a => string.IsNullOrWhiteSpace(a.Name) ? a.Exe : a.Name));
+        }
+        return names;
     }
 
     static string VolumeDb(double v) => v <= 0.0001 ? "-∞ dB" : $"{20 * Math.Log10(v):+0.0;-0.0;0.0} dB";
@@ -608,6 +825,13 @@ public partial class MainWindow : Window
             m.MicVolume = (float)_settings.MicVolume;
             m.DesktopMuted = _settings.DesktopMuted;
             m.MicMuted = _settings.MicMuted;
+            foreach (var a in m.Apps)
+            {
+                var cfg = _settings.AppTracks.FirstOrDefault(x => x.Exe.Equals(a.Exe, StringComparison.OrdinalIgnoreCase));
+                if (cfg == null) continue;
+                a.Volume = (float)cfg.Volume;
+                a.Muted = cfg.Muted;
+            }
         }
         UpdateTrackLabels();
     }
@@ -740,6 +964,32 @@ public partial class MainWindow : Window
             ShowError("Couldn't open the clip: " + ex.Message);
             try { CloseEditor(); } catch { }
         }
+    }
+
+    /// <summary>CI only: checks Windows accepts a per-app audio capture.</summary>
+    static async Task SelfTestAppAudioAsync()
+    {
+        string result;
+        try
+        {
+            var pid = ProcessAudioCapture.FindRootProcess("explorer.exe");
+            if (pid == null) result = "app audio: explorer.exe not found";
+            else
+            {
+                using var cap = await ProcessAudioCapture.StartAsync(pid.Value, 48000);
+                int packets = 0;
+                cap.DataAvailable += (_, _) => packets++;
+                await Task.Delay(1500);
+                result = $"app audio: capture started for explorer.exe (pid {pid}), alive={cap.IsAlive}, packets={packets}";
+            }
+        }
+        catch (Exception ex) { result = "app audio: FAILED " + ex.GetType().Name + ": " + ex.Message; }
+        try
+        {
+            Directory.CreateDirectory(AppSettings.LocalDataDir);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), result + "\n");
+        }
+        catch { }
     }
 
     /// <summary>CI only: opens every dropdown in the editor to catch rendering errors.</summary>
@@ -1050,6 +1300,7 @@ public partial class MainWindow : Window
 
             DesktopAudioToggle.IsChecked = _settings.DesktopAudio;
             SeparateTracksToggle.IsChecked = _settings.SeparateAudioTracks;
+            RefreshAppTracksList();
             DesktopVolumeSlider.Value = _settings.DesktopVolume * 100;
             DesktopVolumeValue.Text = $"{_settings.DesktopVolume * 100:0}%";
             MicCombo.Items.Clear();
@@ -1120,6 +1371,7 @@ public partial class MainWindow : Window
         _settings.CaptureCursor = CursorToggle.IsChecked == true;
         _settings.DesktopAudio = DesktopAudioToggle.IsChecked == true;
         _settings.SeparateAudioTracks = SeparateTracksToggle.IsChecked == true;
+        RefreshAppTracksList();
         var mic = SelectedTag<string>(MicCombo);
         _settings.MicDeviceId = string.IsNullOrEmpty(mic) ? null : mic;
         _settings.Save();

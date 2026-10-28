@@ -78,6 +78,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # pre-configure an app audio track so the mixer row shows in the screenshot
+          New-Item -ItemType Directory -Force "$env:APPDATA\Savor" | Out-Null
+          '{"SeparateAudioTracks":true,"AppTracks":[{"Exe":"explorer.exe","Name":"Windows Explorer","Volume":1.0}]}' | Out-File "$env:APPDATA\Savor\settings.json" -Encoding utf8
+          $env:SAVOR_SELFTEST_AUDIO = "1"
           $p = Start-Process publish/Savor.exe -PassThru
           Start-Sleep 40
           $p.Refresh()
@@ -88,6 +92,9 @@ jobs:
           $line = "Savor: private working set $(Mb $pws) MB, working set $(Mb $p.WorkingSet64) MB, private bytes $(Mb $p.PrivateMemorySize64) MB | children: $kidTxt"
           Write-Host "::notice::$line"
           $line | Out-File diag.txt
+          $st0 = "$env:LOCALAPPDATA\Savor\selftest.log"
+          if (Test-Path $st0) { $t0 = Get-Content $st0 -Raw; Write-Host "::notice::$t0"; Remove-Item $st0 }
+          $env:SAVOR_SELFTEST_AUDIO = $null
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
           $g = [System.Drawing.Graphics]::FromImage($bmp)

@@ -211,13 +211,14 @@ public sealed class CaptureEngine : IDisposable
         lock (_log) _log.Clear();
 
         // ---- audio ----
-        bool audio = s.DesktopAudio || !string.IsNullOrEmpty(s.MicDeviceId);
+        bool audio = s.DesktopAudio || !string.IsNullOrEmpty(s.MicDeviceId) || (s.SeparateAudioTracks && s.AppTracks.Count > 0);
         int rate = 48000;
         if (audio)
         {
             try
             {
-                _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume)
+                _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume,
+                                        s.SeparateAudioTracks ? s.AppTracks : null)
                 {
                     SeparateTracks = s.SeparateAudioTracks,
                     DesktopMuted = s.DesktopMuted,

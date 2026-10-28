@@ -362,6 +362,9 @@
                                     </Button>
                                 </StackPanel>
                             </Grid>
+
+                            <!-- one row per app with its own track (built in code) -->
+                            <StackPanel x:Name="AppRows"/>
                         </StackPanel>
                     </Border>
                 </Grid>
@@ -466,6 +469,17 @@
                                     <TextBlock Text="Microphone" FontWeight="SemiBold"/>
                                 </StackPanel>
                                 <ComboBox x:Name="SourceMicCombo" MinWidth="0" SelectionChanged="Source_Changed"/>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,4" Content="Manage"
+                                            Click="ManageApps_Click"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE8A9;" Foreground="{StaticResource MutedBrush}" Margin="0,0,8,0"/>
+                                        <TextBlock Text="App audio" FontWeight="SemiBold"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <TextBlock x:Name="SourceAppsText" Foreground="{StaticResource FaintBrush}" FontSize="11.5"
+                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
                                 <TextBlock x:Name="SourceNote" Foreground="{StaticResource AccentBrush}" FontSize="11.5" Margin="0,10,0,0"
                                            TextWrapping="Wrap" Visibility="Collapsed"
                                            Text="Changes apply when the current recording stops."/>
@@ -663,9 +677,22 @@
                                     <StackPanel>
                                         <TextBlock Text="Separate audio tracks" Style="{StaticResource RowTitle}"/>
                                         <TextBlock Style="{StaticResource RowDesc}"
-                                                   Text="Track 1 is everything mixed (what players and Discord play). Track 2 is desktop audio only, track 3 is your mic only, so you can fix levels or cut your voice when editing."/>
+                                                   Text="Track 1 is everything mixed (what players and Discord play). Then desktop audio, your mic, and each app below get their own tracks, so you can fix levels or cut things out when editing."/>
                                     </StackPanel>
                                 </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <StackPanel x:Name="AppTracksSection">
+                                    <DockPanel>
+                                        <ComboBox x:Name="AddAppCombo" DockPanel.Dock="Right" MinWidth="240"
+                                                  DropDownOpened="AddAppCombo_Opened" SelectionChanged="AddAppCombo_Changed"/>
+                                        <StackPanel>
+                                            <TextBlock Text="App audio tracks" Style="{StaticResource RowTitle}"/>
+                                            <TextBlock x:Name="AppTracksDesc" Style="{StaticResource RowDesc}"
+                                                       Text="Give apps like your game, Discord or Spotify their own track. Desktop audio still records everything; leave this empty to keep just desktop audio."/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                    <StackPanel x:Name="AppTracksList" Margin="0,10,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

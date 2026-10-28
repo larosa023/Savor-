@@ -87,6 +87,15 @@ public sealed class HotkeyBinding
     };
 }
 
+/// <summary>An application whose audio gets its own track.</summary>
+public sealed class AppAudioSetting
+{
+    public string Exe { get; set; } = "";
+    public string Name { get; set; } = "";
+    public double Volume { get; set; } = 1.0;
+    public bool Muted { get; set; }
+}
+
 public sealed class EncoderCache
 {
     public string FfmpegStamp { get; set; } = "";
@@ -118,6 +127,8 @@ public sealed class AppSettings
     public bool ShowPreview { get; set; } = true;
     /// <summary>Write Mix + Desktop + Mic as separate audio tracks (when both sources are on).</summary>
     public bool SeparateAudioTracks { get; set; } = true;
+    /// <summary>Apps that each get their own audio track (needs separate tracks on).</summary>
+    public List<AppAudioSetting> AppTracks { get; set; } = new();
 
     public string Container { get; set; } = "mp4";
 
@@ -177,6 +188,7 @@ public sealed class AppSettings
         DesktopVolume = Math.Clamp(DesktopVolume, 0, 2);
         MicVolume = Math.Clamp(MicVolume, 0, 2);
         if (Container != "mp4" && Container != "mkv") Container = "mp4";
+        AppTracks ??= new();
         SaveClipHotkey ??= new();
         RecordHotkey ??= new();
         BufferHotkey ??= new();
