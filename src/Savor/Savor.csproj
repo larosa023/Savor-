@@ -12,13 +12,13 @@
     <RootNamespace>Savor</RootNamespace>
     <ApplicationIcon>Assets\savor.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.4.3</Version>
+    <Version>0.4.4</Version>
     <Product>Savor</Product>
     <Description>Lightweight screen recorder with a replay buffer</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <!-- memory: no ICU data, a single non-concurrent GC that gives memory back eagerly -->
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- memory: a single non-concurrent GC that gives memory back eagerly.
+         (InvariantGlobalization is NOT used: WPF dropdowns need real culture data.) -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>false</TieredPGO>
   </PropertyGroup>

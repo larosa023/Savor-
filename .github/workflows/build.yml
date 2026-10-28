@@ -107,6 +107,7 @@ jobs:
           $clip = "$env:USERPROFILE\Videos\Savor\Clip test.mp4"
           New-Item -ItemType Directory -Force (Split-Path $clip) | Out-Null
           & $ff.FullName -v error -y -f lavfi -i testsrc2=size=1920x1080:rate=60 -f lavfi -i sine=440 -t 12 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac $clip
+          $env:SAVOR_SELFTEST = "1"
           $p = Start-Process publish/Savor.exe -ArgumentList "--edit", "`"$clip`"" -PassThru
           Start-Sleep 25
           $p.Refresh()

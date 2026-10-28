@@ -19,7 +19,12 @@ namespace Savor;
 /// </summary>
 public partial class ClipEditor : UserControl
 {
-    readonly DispatcherTimer _timer;
+    // smooth playhead: interpolate between the player's coarse position updates
+    readonly Stopwatch _clock = new();
+    TimeSpan _clockBase;
+    TimeSpan? _pendingSeek;
+    long _lastSeekTicks, _lastSyncTicks, _lastTextTicks;
+    bool _renderHooked;
     string? _path;
     Func<EncoderDef?>? _encoder;
     AppSettings? _settings;
@@ -45,8 +50,6 @@ public partial class ClipEditor : UserControl
     {
         InitializeComponent();
         _ready = true;
-        _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
-        _timer.Tick += (_, _) => Tick();
         PreviewKeyDown += OnKey;
     }
 
@@ -80,14 +83,18 @@ public partial class ClipEditor : UserControl
         Player.Volume = VolumeSlider.Value;
         Player.Source = new Uri(path);
         Player.Pause(); // opens the file and shows the first frame
-        _timer.Start();
+        _clockBase = TimeSpan.Zero;
+        _clock.Reset();
+        if (!_renderHooked) { CompositionTarget.Rendering += OnFrame; _renderHooked = true; }
         Focus();
     }
 
     /// <summary>Stops playback and releases the decoder and the file handle.</summary>
     public void Release()
     {
-        _timer.Stop();
+        if (_renderHooked) { CompositionTarget.Rendering -= OnFrame; _renderHooked = false; }
+        _clock.Reset();
+        _pendingSeek = null;
         try { Player.Stop(); } catch { }
         try { Player.Close(); } catch { }
         Player.Source = null;
@@ -115,7 +122,8 @@ public partial class ClipEditor : UserControl
         if (_in == TimeSpan.Zero && _out == TimeSpan.Zero) { _in = TimeSpan.Zero; _out = _duration; }
         var meta = MetaText.Text;
         if (!meta.Contains('×')) MetaText.Text = $"{_vw}×{_vh}  ·  {Fmt(_duration)}  ·  {meta}";
-        Player.Position = TimeSpan.Zero;
+        _clockBase = TimeSpan.Zero;
+        FlushSeek(TimeSpan.Zero);
         UpdateTimeline();
         UpdateTrimText();
         LayoutCrop();
@@ -152,21 +160,30 @@ public partial class ClipEditor : UserControl
 
     void Player_MediaEnded(object sender, RoutedEventArgs e) => Pause();
 
+    /// <summary>Where playback is right now (smooth, not limited to the player's update rate).</summary>
+    TimeSpan Now => _clock.IsRunning ? _clockBase + _clock.Elapsed : _clockBase;
+
     void Play()
     {
         if (!_opened) return;
-        var pos = Player.Position;
-        if (pos < _in || pos >= _out - TimeSpan.FromMilliseconds(50)) Player.Position = _in;
+        var pos = Now;
+        if (pos < _in || pos >= _out - TimeSpan.FromMilliseconds(50)) pos = _in;
+        FlushSeek(pos);
         Player.Play();
         _playing = true;
+        _clockBase = pos;
+        _clock.Restart();
         BigPlay.Visibility = Visibility.Collapsed;
         UpdatePlayIcon();
     }
 
     void Pause()
     {
+        var pos = Now;
         Player.Pause();
         _playing = false;
+        _clock.Reset();
+        _clockBase = pos;
         UpdatePlayIcon();
     }
 
@@ -174,33 +191,58 @@ public partial class ClipEditor : UserControl
 
     public void PauseIfPlaying() { if (_playing) Pause(); }
 
-    void UpdatePlayIcon() => PlayIcon.Text = _playing ? "" : "";
+    void UpdatePlayIcon() => PlayIcon.Text = _playing ? "\uF8AE" : "\uF5B0";
 
+    /// <summary>Moves the playhead now; the actual (expensive) video seek is rate-limited.</summary>
     void Seek(TimeSpan t)
     {
         if (_duration <= TimeSpan.Zero) return;
-        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
-        if (t > _duration) t = _duration;
-        Player.Position = t;
+        t = Clamp(t, TimeSpan.Zero, _duration);
+        _clockBase = t;
+        if (_clock.IsRunning) _clock.Restart();
+        _pendingSeek = t;
         BigPlay.Visibility = Visibility.Collapsed;
-        UpdateTimeline();
+        UpdatePlayhead(force: true);
     }
 
-    void Tick()
+    void FlushSeek(TimeSpan t)
     {
-        if (!_opened) return;
-        if (_playing && Player.Position >= _out)
+        _pendingSeek = null;
+        _lastSeekTicks = Environment.TickCount64;
+        if (_opened) Player.Position = t;
+    }
+
+    /// <summary>Runs once per screen refresh while the editor is open.</summary>
+    void OnFrame(object? sender, EventArgs e)
+    {
+        if (!_opened && _duration <= TimeSpan.Zero) return;
+        long now = Environment.TickCount64;
+
+        // seek at most ~25 times a second while scrubbing; always land on the final position
+        if (_pendingSeek is { } ps && now - _lastSeekTicks >= 40) FlushSeek(ps);
+
+        if (_playing)
         {
-            Pause();
-            Player.Position = _out;
+            if (Now >= _out)
+            {
+                Pause();
+                Seek(_out);
+            }
+            else if (now - _lastSyncTicks > 300 && _pendingSeek == null)
+            {
+                // re-anchor to the real position if we've drifted noticeably
+                _lastSyncTicks = now;
+                var real = Player.Position;
+                if (Math.Abs((real - Now).TotalMilliseconds) > 120) { _clockBase = real; _clock.Restart(); }
+            }
         }
-        UpdateTimeline();
+        UpdatePlayhead(force: false);
     }
 
     void PlayPause_Click(object sender, RoutedEventArgs e) => TogglePlay();
     void Stage_Click(object sender, MouseButtonEventArgs e) { if (_cropMode == "none") TogglePlay(); }
-    void Back5_Click(object sender, RoutedEventArgs e) => Seek(Player.Position - TimeSpan.FromSeconds(5));
-    void Fwd5_Click(object sender, RoutedEventArgs e) => Seek(Player.Position + TimeSpan.FromSeconds(5));
+    void Back5_Click(object sender, RoutedEventArgs e) => Seek(Now - TimeSpan.FromSeconds(5));
+    void Fwd5_Click(object sender, RoutedEventArgs e) => Seek(Now + TimeSpan.FromSeconds(5));
 
     void Volume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -224,10 +266,10 @@ public partial class ClipEditor : UserControl
         switch (e.Key)
         {
             case Key.Space: TogglePlay(); break;
-            case Key.Left: Seek(Player.Position - TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
-            case Key.Right: Seek(Player.Position + TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
-            case Key.I: SetIn(Player.Position); break;
-            case Key.O: SetOut(Player.Position); break;
+            case Key.Left: Seek(Now - TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
+            case Key.Right: Seek(Now + TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
+            case Key.I: SetIn(Now); break;
+            case Key.O: SetOut(Now); break;
             case Key.Home: Seek(_in); break;
             case Key.End: Seek(_out); break;
             case Key.Escape: RequestClose(); break;
@@ -267,8 +309,8 @@ public partial class ClipEditor : UserControl
         UpdateTrimText();
     }
 
-    void SetIn_Click(object sender, RoutedEventArgs e) => SetIn(Player.Position);
-    void SetOut_Click(object sender, RoutedEventArgs e) => SetOut(Player.Position);
+    void SetIn_Click(object sender, RoutedEventArgs e) => SetIn(Now);
+    void SetOut_Click(object sender, RoutedEventArgs e) => SetOut(Now);
 
     void ResetTrim_Click(object sender, RoutedEventArgs e)
     {
@@ -292,22 +334,39 @@ public partial class ClipEditor : UserControl
         ExportText.Text = trimmed || _cropMode != "none" ? "Export" : "Export copy";
     }
 
-    double TrackWidth => Math.Max(1, Timeline.ActualWidth);
+    const double Pad = 18; // room for the handles at both ends
 
-    double X(TimeSpan t) => _duration.TotalMilliseconds <= 0 ? 0 : t.TotalMilliseconds / _duration.TotalMilliseconds * TrackWidth;
+    double TrackWidth => Math.Max(1, Timeline.ActualWidth - Pad * 2);
 
-    TimeSpan T(double x) => TimeSpan.FromMilliseconds(Math.Clamp(x / TrackWidth, 0, 1) * _duration.TotalMilliseconds);
+    double X(TimeSpan t) => Pad + (_duration.TotalMilliseconds <= 0 ? 0 : t.TotalMilliseconds / _duration.TotalMilliseconds * TrackWidth);
 
+    TimeSpan T(double x) => TimeSpan.FromMilliseconds(Math.Clamp((x - Pad) / TrackWidth, 0, 1) * _duration.TotalMilliseconds);
+
+    /// <summary>Trim band + handles (only changes when trimming).</summary>
     void UpdateTimeline()
     {
         double xi = X(_in), xo = X(_out);
         Canvas.SetLeft(SelBand, xi);
         SelBand.Width = Math.Max(0, xo - xi);
-        Canvas.SetLeft(InHandle, xi - InHandle.Width);
-        Canvas.SetLeft(OutHandle, xo);
-        var pos = _opened ? Player.Position : TimeSpan.Zero;
-        Canvas.SetLeft(Playhead, Math.Clamp(X(pos) - 1, 0, TrackWidth - 2));
-        TimeText.Text = $"{Fmt(pos)} / {Fmt(_duration)}";
+        InX.X = xi - InHandle.Width;
+        OutX.X = xo;
+        UpdatePlayhead(force: true);
+    }
+
+    TimeSpan _shownPos = TimeSpan.MinValue;
+
+    /// <summary>Playhead + time readout (every frame; transform only, no layout).</summary>
+    void UpdatePlayhead(bool force)
+    {
+        var pos = Clamp(Now, TimeSpan.Zero, _duration);
+        PlayheadX.X = X(pos) - Playhead.Width / 2;
+        long now = Environment.TickCount64;
+        if (force || (pos != _shownPos && now - _lastTextTicks > 50))
+        {
+            _lastTextTicks = now;
+            _shownPos = pos;
+            TimeText.Text = $"{Fmt(pos)} / {Fmt(_duration)}";
+        }
     }
 
     void Timeline_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateTimeline();
@@ -315,20 +374,38 @@ public partial class ClipEditor : UserControl
     enum Drag { None, In, Out, Scrub }
     Drag _drag;
     bool _wasPlaying;
+    double _grabOffset;
+
+    /// <summary>Which handle (if any) is under x — generous 14 px slop around each handle.</summary>
+    Drag HandleAt(double x)
+    {
+        double xi = X(_in), xo = X(_out);
+        double inCenter = xi - InHandle.Width / 2, outCenter = xo + OutHandle.Width / 2;
+        double dIn = Math.Abs(x - inCenter), dOut = Math.Abs(x - outCenter);
+        const double grab = 9 + 14;
+        if (dIn > grab && dOut > grab) return Drag.None;
+        return dIn <= dOut ? Drag.In : Drag.Out;
+    }
 
     void Timeline_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (_duration <= TimeSpan.Zero) return;
         double x = e.GetPosition(Timeline).X;
-        double xi = X(_in), xo = X(_out);
-        if (Math.Abs(x - (xi - 5)) <= 10) _drag = Drag.In;
-        else if (Math.Abs(x - (xo + 5)) <= 10) _drag = Drag.Out;
+        _drag = HandleAt(x);
+        if (_drag == Drag.In) _grabOffset = x - X(_in);
+        else if (_drag == Drag.Out) _grabOffset = x - X(_out);
         else
         {
             _drag = Drag.Scrub;
             _wasPlaying = _playing;
             if (_playing) Pause();
             Seek(T(x));
+        }
+        if (_drag != Drag.Scrub)
+        {
+            _wasPlaying = _playing;
+            if (_playing) Pause();
+            (_drag == Drag.In ? InHandle : OutHandle).Opacity = 0.85;
         }
         Timeline.CaptureMouse();
         Focus();
@@ -337,21 +414,30 @@ public partial class ClipEditor : UserControl
 
     void Timeline_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_drag == Drag.None) return;
-        var t = T(e.GetPosition(Timeline).X);
+        double x = e.GetPosition(Timeline).X;
+        if (_drag == Drag.None)
+        {
+            Timeline.Cursor = HandleAt(x) != Drag.None ? Cursors.SizeWE : Cursors.Hand;
+            return;
+        }
         switch (_drag)
         {
-            case Drag.In: SetIn(t); Seek(_in); break;
-            case Drag.Out: SetOut(t); Seek(_out); break;
-            case Drag.Scrub: Seek(t); break;
+            case Drag.In: SetIn(T(x - _grabOffset)); Seek(_in); break;
+            case Drag.Out: SetOut(T(x - _grabOffset)); Seek(_out); break;
+            case Drag.Scrub: Seek(T(x)); break;
         }
     }
 
-    void Timeline_MouseUp(object sender, MouseButtonEventArgs e)
+    void Timeline_MouseUp(object sender, MouseButtonEventArgs e) => Timeline.ReleaseMouseCapture();
+
+    void Timeline_LostCapture(object sender, MouseEventArgs e)
     {
-        if (_drag == Drag.Scrub && _wasPlaying) Play();
+        if (_drag == Drag.None) return;
+        if (_pendingSeek is { } ps) FlushSeek(ps);
+        InHandle.Opacity = OutHandle.Opacity = 1;
+        bool resume = _drag == Drag.Scrub && _wasPlaying;
         _drag = Drag.None;
-        Timeline.ReleaseMouseCapture();
+        if (resume) Play();
     }
 
     // ===================== crop =====================
@@ -590,7 +676,7 @@ public partial class ClipEditor : UserControl
         };
 
         Pause();
-        var keepPos = Player.Position;
+        var keepPos = Now;
         if (replace) Release(); // the player holds the file open
 
         _exportCts = new CancellationTokenSource();
@@ -622,7 +708,7 @@ public partial class ClipEditor : UserControl
                 // reopen the (new) file
                 var path = _path;
                 Open(path, _settings, _encoder!);
-                if (crop == null && req.Start == TimeSpan.Zero) Player.Position = Clamp(keepPos, TimeSpan.Zero, _out);
+                if (crop == null && req.Start == TimeSpan.Zero) Seek(Clamp(keepPos, TimeSpan.Zero, _out));
             }
         }
     }

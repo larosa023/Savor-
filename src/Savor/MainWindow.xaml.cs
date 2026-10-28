@@ -150,6 +150,8 @@ public partial class MainWindow : Window
 
         await DetectEncodersAsync(force: false);
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
+        if (_editOnStart != null && Environment.GetEnvironmentVariable("SAVOR_SELFTEST") == "1")
+            _ = SelfTestDropdownsAsync();
 
         if (_settings.StartBufferOnLaunch && _engine.Encoder != null)
             await ToggleBufferAsync(forceOn: true);
@@ -737,6 +739,33 @@ public partial class MainWindow : Window
             LogError("Open editor", ex);
             ShowError("Couldn't open the clip: " + ex.Message);
             try { CloseEditor(); } catch { }
+        }
+    }
+
+    /// <summary>CI only: opens every dropdown in the editor to catch rendering errors.</summary>
+    async Task SelfTestDropdownsAsync()
+    {
+        await Task.Delay(4000);
+        if (_editor == null) return;
+        foreach (var cb in FindAll<ComboBox>(_editor))
+        {
+            try
+            {
+                cb.IsDropDownOpen = true;
+                await Task.Delay(400);
+                cb.IsDropDownOpen = false;
+            }
+            catch (Exception ex) { LogError("Dropdown self-test", ex); }
+        }
+    }
+
+    static IEnumerable<T> FindAll<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            if (c is T t) yield return t;
+            foreach (var d in FindAll<T>(c)) yield return d;
         }
     }
 

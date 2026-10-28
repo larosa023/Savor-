@@ -117,20 +117,35 @@
         <!-- ============ transport + timeline ============ -->
         <StackPanel Grid.Row="2" Margin="0,14,0,0">
             <!-- timeline -->
-            <Grid x:Name="Timeline" Height="38" Cursor="Hand" Background="Transparent"
+            <Grid x:Name="Timeline" Height="44" Background="Transparent"
                   MouseLeftButtonDown="Timeline_MouseDown" MouseMove="Timeline_MouseMove" MouseLeftButtonUp="Timeline_MouseUp"
-                  SizeChanged="Timeline_SizeChanged">
-                <Border CornerRadius="6" Background="{StaticResource Surface2Brush}" Height="26" VerticalAlignment="Center"/>
+                  LostMouseCapture="Timeline_LostCapture" SizeChanged="Timeline_SizeChanged">
+                <Border CornerRadius="6" Background="{StaticResource Surface2Brush}" Height="28" VerticalAlignment="Center"
+                        Margin="18,0"/>
                 <Canvas x:Name="TimelineCanvas" IsHitTestVisible="False" ClipToBounds="False">
-                    <Border x:Name="SelBand" Height="26" Canvas.Top="6" CornerRadius="6" Background="{StaticResource AccentSoftBrush}"
+                    <Border x:Name="SelBand" Height="28" Canvas.Top="8" Width="0" Background="{StaticResource AccentSoftBrush}"
                             BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,2"/>
-                    <Border x:Name="InHandle" Width="10" Height="30" Canvas.Top="4" CornerRadius="4,0,0,4" Background="{StaticResource AccentBrush}">
-                        <Rectangle Width="2" Height="12" Fill="#1A0E08" RadiusX="1" RadiusY="1"/>
+                    <Border x:Name="InHandle" Width="18" Height="38" Canvas.Top="3" CornerRadius="6,0,0,6"
+                            Background="{StaticResource AccentBrush}">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Rectangle Width="2" Height="14" Fill="#1A0E08" RadiusX="1" RadiusY="1" Margin="1,0"/>
+                            <Rectangle Width="2" Height="14" Fill="#1A0E08" RadiusX="1" RadiusY="1" Margin="1,0"/>
+                        </StackPanel>
+                        <Border.RenderTransform><TranslateTransform x:Name="InX"/></Border.RenderTransform>
                     </Border>
-                    <Border x:Name="OutHandle" Width="10" Height="30" Canvas.Top="4" CornerRadius="0,4,4,0" Background="{StaticResource AccentBrush}">
-                        <Rectangle Width="2" Height="12" Fill="#1A0E08" RadiusX="1" RadiusY="1"/>
+                    <Border x:Name="OutHandle" Width="18" Height="38" Canvas.Top="3" CornerRadius="0,6,6,0"
+                            Background="{StaticResource AccentBrush}">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Rectangle Width="2" Height="14" Fill="#1A0E08" RadiusX="1" RadiusY="1" Margin="1,0"/>
+                            <Rectangle Width="2" Height="14" Fill="#1A0E08" RadiusX="1" RadiusY="1" Margin="1,0"/>
+                        </StackPanel>
+                        <Border.RenderTransform><TranslateTransform x:Name="OutX"/></Border.RenderTransform>
                     </Border>
-                    <Rectangle x:Name="Playhead" Width="2" Height="38" Canvas.Top="0" Fill="White" RadiusX="1" RadiusY="1"/>
+                    <Grid x:Name="Playhead" Width="12" Height="44" Canvas.Top="0">
+                        <Rectangle Width="2" Fill="White" RadiusX="1" RadiusY="1"/>
+                        <Ellipse Width="10" Height="10" Fill="White" VerticalAlignment="Top"/>
+                        <Grid.RenderTransform><TranslateTransform x:Name="PlayheadX"/></Grid.RenderTransform>
+                    </Grid>
                 </Canvas>
             </Grid>
 
