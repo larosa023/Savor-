@@ -349,13 +349,17 @@ public partial class MainWindow : Window
 
     // ----- live preview -----
 
+    bool _previewGpuFailed;
+    bool _previewWanted;
+    bool _renderHooked;
+
     void UpdatePreview(bool shown)
     {
         var d = _engine.Display;
         var enc = _engine.Encoder;
-        bool want = shown && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
-                    && d != null && enc != null && Ffmpeg.Path != null;
-        if (!want)
+        _previewWanted = shown && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
+                         && d != null && enc != null && Ffmpeg.Path != null;
+        if (!_previewWanted)
         {
             if (_preview.IsRunning) _preview.Stop();
             _previewHasFrame = false;
@@ -367,35 +371,61 @@ public partial class MainWindow : Window
             return;
         }
 
-        var key = PreviewSource.MakeKey(d!, enc!, _settings.CaptureCursor);
-        if ((!_preview.IsRunning || _preview.Key != key) && (DateTime.UtcNow - _lastPreviewStart).TotalSeconds > 2)
+        if (!_renderHooked)
+        {
+            CompositionTarget.Rendering += OnRendering;
+            _renderHooked = true;
+        }
+
+        // GPU downscale isn't available on every driver/ffmpeg: fall back if it produced nothing.
+        if (_preview.GpuScale && _preview.FramesReceived == 0 &&
+            (_preview.HasExited || (DateTime.UtcNow - _preview.StartedUtc).TotalSeconds > 4))
+        {
+            _previewGpuFailed = true;
+            _preview.Stop();
+            _lastPreviewStart = DateTime.MinValue;
+        }
+
+        // size the stream to the on-screen box (in physical pixels)
+        var dpi = VisualTreeHelper.GetDpi(PreviewFrame);
+        var (w, h) = PreviewSource.FitSize(d!, PreviewFrame.ActualWidth * dpi.DpiScaleX, PreviewFrame.ActualHeight * dpi.DpiScaleY);
+        bool sizeChanged = _preview.IsRunning && (Math.Abs(w - _preview.Width) > _preview.Width * 0.2);
+        var key = PreviewSource.MakeKey(d!, enc!, _settings.CaptureCursor, sizeChanged ? w : _preview.Width, sizeChanged ? h : _preview.Height);
+
+        if ((!_preview.IsRunning || _preview.Key != key) && (DateTime.UtcNow - _lastPreviewStart).TotalSeconds > 1.5)
         {
             _lastPreviewStart = DateTime.UtcNow;
-            _preview.Start(d!, enc!, _settings.CaptureCursor);
-            _previewBitmap = new WriteableBitmap(Math.Max(2, _preview.Width), Math.Max(2, _preview.Height), 96, 96, PixelFormats.Bgr32, null);
+            _preview.Start(d!, enc!, _settings.CaptureCursor, w, h, gpuScale: !_previewGpuFailed);
+            _previewBitmap = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr32, null);
+            RenderOptions.SetBitmapScalingMode(PreviewBrush, BitmapScalingMode.Linear);
             PreviewBrush.ImageSource = _previewBitmap;
             _previewHasFrame = false;
             PreviewLabel.Text = $"Display {d!.OutputIndex + 1}  ·  {d.Width}×{d.Height}";
         }
 
-        var bmp = _previewBitmap;
-        if (bmp != null && _preview.TryTakeFrame(buf =>
-            {
-                if (buf.Length == bmp.PixelWidth * bmp.PixelHeight * 4)
-                    bmp.WritePixels(new Int32Rect(0, 0, bmp.PixelWidth, bmp.PixelHeight), buf, bmp.PixelWidth * 4, 0);
-            }))
-        {
-            if (!_previewHasFrame)
-            {
-                _previewHasFrame = true;
-                PreviewPlaceholder.Visibility = Visibility.Collapsed;
-                PreviewLiveDot.Fill = (Brush)FindResource("LiveBrush");
-            }
-        }
-        else if (!_previewHasFrame)
+        if (!_previewHasFrame)
         {
             PreviewPlaceholder.Visibility = Visibility.Visible;
             PreviewPlaceholderText.Text = "Starting preview…";
+        }
+    }
+
+    /// <summary>Runs once per screen refresh; pushes the newest preview frame, if any.</summary>
+    void OnRendering(object? sender, EventArgs e)
+    {
+        if (!_previewWanted) return;
+        var bmp = _previewBitmap;
+        if (bmp == null) return;
+        bool got = _preview.TryTakeFrame(buf =>
+        {
+            if (buf.Length == bmp.PixelWidth * bmp.PixelHeight * 4)
+                bmp.WritePixels(new Int32Rect(0, 0, bmp.PixelWidth, bmp.PixelHeight), buf, bmp.PixelWidth * 4, 0);
+        });
+        if (got && !_previewHasFrame)
+        {
+            _previewHasFrame = true;
+            PreviewPlaceholder.Visibility = Visibility.Collapsed;
+            PreviewLiveDot.Fill = (Brush)FindResource("LiveBrush");
         }
     }
 

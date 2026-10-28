@@ -22,14 +22,17 @@ jobs:
       - name: Fetch FFmpeg (embedded into Savor.exe)
         shell: pwsh
         run: |
-          # Pinned to the stable 7.1 branch so FFmpeg option changes can't break Savor unexpectedly.
+          # Pinned to a stable release branch (8.0 has GPU scaling for the live preview), falling back to 7.1.
           $base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
-          try { Invoke-WebRequest "$base/ffmpeg-n7.1-latest-win64-gpl-7.1.zip" -OutFile ffmpeg.zip }
-          catch { Write-Warning "7.1 build not found, using master"; Invoke-WebRequest "$base/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip }
+          $ok = $false
+          foreach ($f in @("ffmpeg-n8.0-latest-win64-gpl-8.0.zip", "ffmpeg-n7.1-latest-win64-gpl-7.1.zip")) {
+            try { Invoke-WebRequest "$base/$f" -OutFile ffmpeg.zip; Write-Host "Using $f"; $ok = $true; break } catch { Write-Warning "$f not found" }
+          }
+          if (-not $ok) { throw "No FFmpeg build found" }
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
           $exe = Get-ChildItem ffmpeg-dl -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           & $exe.FullName -hide_banner -version | Select-Object -First 1
-          & $exe.FullName -hide_banner -filters | Select-String ddagrab
+          & $exe.FullName -hide_banner -filters | Select-String "ddagrab|scale_d3d11"
           New-Item -ItemType Directory -Force ffmpeg | Out-Null
           $in = [IO.File]::OpenRead($exe.FullName)
           $out = [IO.File]::Create("ffmpeg/ffmpeg.exe.gz")
