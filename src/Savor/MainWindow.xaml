@@ -66,7 +66,8 @@
                     Tag="{Binding}" MouseLeftButtonUp="ClipCard_Click" ToolTip="{Binding FilePath}">
                 <Border.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="Open" Click="ClipOpen_Click"/>
+                        <MenuItem Header="View &amp; edit" Click="ClipOpen_Click"/>
+                        <MenuItem Header="Open in default player" Click="ClipExternal_Click"/>
                         <MenuItem Header="Show in folder" Click="ClipReveal_Click"/>
                         <MenuItem Header="Copy file" Click="ClipCopy_Click"/>
                         <MenuItem Header="Delete" Click="ClipDelete_Click"/>
@@ -155,7 +156,7 @@
                         <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="StudioTab" Style="{StaticResource NavTab}" Content="Studio" IsChecked="True"
                                          Checked="Tab_Checked"/>
-                            <RadioButton x:Name="CapturesTab" Style="{StaticResource NavTab}" Checked="Tab_Checked">
+                            <RadioButton x:Name="CapturesTab" Style="{StaticResource NavTab}" Checked="Tab_Checked" Click="CapturesTab_Click">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="Captures"/>
                                     <TextBlock x:Name="ClipCount" Foreground="{StaticResource FaintBrush}" Margin="6,0,0,0"/>
@@ -484,6 +485,9 @@
                     </StackPanel>
                 </DockPanel>
             </Grid>
+
+            <!-- ================= clip editor ================= -->
+            <Grid x:Name="EditorPage" Grid.Row="1" Margin="20,0,20,16" Visibility="Collapsed"/>
 
             <!-- ================= captures ================= -->
             <Grid x:Name="CapturesPage" Grid.Row="1" Margin="24,0,24,0" Visibility="Collapsed">

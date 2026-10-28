@@ -1,0 +1,633 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Savor.Core;
+
+namespace Savor;
+
+/// <summary>
+/// Built-in viewer/editor for captures: play, trim, crop and export.
+/// Uses Windows' own video playback (no extra libraries) and the bundled ffmpeg for export.
+/// Everything is released when the editor closes, so it costs nothing while you're not using it.
+/// </summary>
+public partial class ClipEditor : UserControl
+{
+    readonly DispatcherTimer _timer;
+    string? _path;
+    Func<EncoderDef?>? _encoder;
+    AppSettings? _settings;
+
+    TimeSpan _duration, _in, _out;
+    bool _playing, _opened;
+    int _vw, _vh;
+    CancellationTokenSource? _exportCts;
+
+    // crop state in source pixels
+    string _cropMode = "none";
+    double _aspect; // 0 = free
+    Rect _crop;
+
+    public event Action? CloseRequested;
+    /// <summary>Raised after an export; the path of the written file.</summary>
+    public event Action<string>? Exported;
+
+    public bool IsBusy => _exportCts != null;
+
+    public ClipEditor()
+    {
+        InitializeComponent();
+        _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
+        _timer.Tick += (_, _) => Tick();
+        PreviewKeyDown += OnKey;
+    }
+
+    // ===================== open / close =====================
+
+    public void Open(string path, AppSettings settings, Func<EncoderDef?> encoder)
+    {
+        _path = path;
+        _settings = settings;
+        _encoder = encoder;
+        _opened = false;
+        _playing = false;
+        _duration = _in = _out = TimeSpan.Zero;
+        TitleText.Text = Path.GetFileNameWithoutExtension(path);
+        try
+        {
+            var fi = new FileInfo(path);
+            MetaText.Text = $"{fi.Length / (double)(1L << 20):0.0} MB  ·  {fi.LastWriteTime:MMM d, h:mm tt}";
+        }
+        catch { MetaText.Text = ""; }
+
+        PlayerMessage.Visibility = Visibility.Collapsed;
+        BigPlay.Visibility = Visibility.Visible;
+        ExportStatus.Visibility = Visibility.Collapsed;
+        ExportProgress.Visibility = Visibility.Collapsed;
+        SetCropMode("none");
+        ((RadioButton)CropPresets.Children[0]).IsChecked = true;
+        FastToggle.IsChecked = false;
+        UpdatePlayIcon();
+
+        Player.Volume = VolumeSlider.Value;
+        Player.Source = new Uri(path);
+        Player.Pause(); // opens the file and shows the first frame
+        _timer.Start();
+        Focus();
+    }
+
+    /// <summary>Stops playback and releases the decoder and the file handle.</summary>
+    public void Release()
+    {
+        _timer.Stop();
+        try { Player.Stop(); } catch { }
+        try { Player.Close(); } catch { }
+        Player.Source = null;
+        _playing = false;
+        _opened = false;
+    }
+
+    void Back_Click(object sender, RoutedEventArgs e) => RequestClose();
+
+    void RequestClose()
+    {
+        if (IsBusy) { _exportCts?.Cancel(); return; }
+        Release();
+        CloseRequested?.Invoke();
+    }
+
+    // ===================== player =====================
+
+    void Player_MediaOpened(object sender, RoutedEventArgs e)
+    {
+        _opened = true;
+        _duration = Player.NaturalDuration.HasTimeSpan ? Player.NaturalDuration.TimeSpan : TimeSpan.Zero;
+        _vw = Player.NaturalVideoWidth;
+        _vh = Player.NaturalVideoHeight;
+        if (_in == TimeSpan.Zero && _out == TimeSpan.Zero) { _in = TimeSpan.Zero; _out = _duration; }
+        var meta = MetaText.Text;
+        if (!meta.Contains('×')) MetaText.Text = $"{_vw}×{_vh}  ·  {Fmt(_duration)}  ·  {meta}";
+        Player.Position = TimeSpan.Zero;
+        UpdateTimeline();
+        UpdateTrimText();
+        LayoutCrop();
+    }
+
+    void Player_MediaFailed(object? sender, ExceptionRoutedEventArgs e)
+    {
+        _opened = false;
+        BigPlay.Visibility = Visibility.Collapsed;
+        PlayerMessage.Visibility = Visibility.Visible;
+        PlayerMessageText.Text = "Windows can't play this file here (often MKV, HEVC or AV1 without the codec installed). " +
+                                 "You can still trim and export it, or use Open externally.";
+        // still allow trimming: get duration from ffmpeg
+        _ = ProbeDurationAsync();
+    }
+
+    async Task ProbeDurationAsync()
+    {
+        if (_path == null || Ffmpeg.Path == null) return;
+        var (_, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", _path }, TimeSpan.FromSeconds(10));
+        var m = System.Text.RegularExpressions.Regex.Match(err, @"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)");
+        var v = System.Text.RegularExpressions.Regex.Match(err, @"Video:.*?,\s(\d{2,5})x(\d{2,5})");
+        if (m.Success)
+        {
+            _duration = new TimeSpan(0, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value),
+                                     int.Parse(m.Groups[4].Value.PadRight(3, '0')[..3]));
+            _in = TimeSpan.Zero;
+            _out = _duration;
+        }
+        if (v.Success) { _vw = int.Parse(v.Groups[1].Value); _vh = int.Parse(v.Groups[2].Value); }
+        UpdateTimeline();
+        UpdateTrimText();
+    }
+
+    void Player_MediaEnded(object sender, RoutedEventArgs e) => Pause();
+
+    void Play()
+    {
+        if (!_opened) return;
+        var pos = Player.Position;
+        if (pos < _in || pos >= _out - TimeSpan.FromMilliseconds(50)) Player.Position = _in;
+        Player.Play();
+        _playing = true;
+        BigPlay.Visibility = Visibility.Collapsed;
+        UpdatePlayIcon();
+    }
+
+    void Pause()
+    {
+        Player.Pause();
+        _playing = false;
+        UpdatePlayIcon();
+    }
+
+    void TogglePlay() { if (_playing) Pause(); else Play(); }
+
+    public void PauseIfPlaying() { if (_playing) Pause(); }
+
+    void UpdatePlayIcon() => PlayIcon.Text = _playing ? "" : "";
+
+    void Seek(TimeSpan t)
+    {
+        if (_duration <= TimeSpan.Zero) return;
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (t > _duration) t = _duration;
+        Player.Position = t;
+        BigPlay.Visibility = Visibility.Collapsed;
+        UpdateTimeline();
+    }
+
+    void Tick()
+    {
+        if (!_opened) return;
+        if (_playing && Player.Position >= _out)
+        {
+            Pause();
+            Player.Position = _out;
+        }
+        UpdateTimeline();
+    }
+
+    void PlayPause_Click(object sender, RoutedEventArgs e) => TogglePlay();
+    void Stage_Click(object sender, MouseButtonEventArgs e) { if (_cropMode == "none") TogglePlay(); }
+    void Back5_Click(object sender, RoutedEventArgs e) => Seek(Player.Position - TimeSpan.FromSeconds(5));
+    void Fwd5_Click(object sender, RoutedEventArgs e) => Seek(Player.Position + TimeSpan.FromSeconds(5));
+
+    void Volume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (Player == null) return;
+        Player.Volume = VolumeSlider.Value;
+        Player.IsMuted = VolumeSlider.Value <= 0.001;
+        VolIcon.Text = Player.IsMuted ? "" : "";
+    }
+
+    double _volBeforeMute = 0.8;
+    void VolIcon_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (VolumeSlider.Value > 0.001) { _volBeforeMute = VolumeSlider.Value; VolumeSlider.Value = 0; }
+        else VolumeSlider.Value = _volBeforeMute;
+    }
+
+    void OnKey(object sender, KeyEventArgs e)
+    {
+        if (e.OriginalSource is ComboBox or ComboBoxItem) return;
+        bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        switch (e.Key)
+        {
+            case Key.Space: TogglePlay(); break;
+            case Key.Left: Seek(Player.Position - TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
+            case Key.Right: Seek(Player.Position + TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
+            case Key.I: SetIn(Player.Position); break;
+            case Key.O: SetOut(Player.Position); break;
+            case Key.Home: Seek(_in); break;
+            case Key.End: Seek(_out); break;
+            case Key.Escape: RequestClose(); break;
+            default: return;
+        }
+        e.Handled = true;
+    }
+
+    void OpenExternal_Click(object sender, RoutedEventArgs e)
+    {
+        if (_path == null) return;
+        Pause();
+        try { Process.Start(new ProcessStartInfo(_path) { UseShellExecute = true }); } catch { }
+    }
+
+    void Reveal_Click(object sender, RoutedEventArgs e)
+    {
+        if (_path == null) return;
+        try { Process.Start("explorer.exe", $"/select,\"{_path}\""); } catch { }
+    }
+
+    // ===================== trim / timeline =====================
+
+    void SetIn(TimeSpan t)
+    {
+        if (_duration <= TimeSpan.Zero) return;
+        _in = Clamp(t, TimeSpan.Zero, _out - TimeSpan.FromMilliseconds(100));
+        UpdateTimeline();
+        UpdateTrimText();
+    }
+
+    void SetOut(TimeSpan t)
+    {
+        if (_duration <= TimeSpan.Zero) return;
+        _out = Clamp(t, _in + TimeSpan.FromMilliseconds(100), _duration);
+        UpdateTimeline();
+        UpdateTrimText();
+    }
+
+    void SetIn_Click(object sender, RoutedEventArgs e) => SetIn(Player.Position);
+    void SetOut_Click(object sender, RoutedEventArgs e) => SetOut(Player.Position);
+
+    void ResetTrim_Click(object sender, RoutedEventArgs e)
+    {
+        _in = TimeSpan.Zero;
+        _out = _duration;
+        UpdateTimeline();
+        UpdateTrimText();
+    }
+
+    static TimeSpan Clamp(TimeSpan v, TimeSpan lo, TimeSpan hi) => v < lo ? lo : v > hi ? hi : v;
+
+    static string Fmt(TimeSpan t) =>
+        t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss\.f") : t.ToString(@"m\:ss\.f");
+
+    void UpdateTrimText()
+    {
+        InText.Text = Fmt(_in);
+        OutText.Text = Fmt(_out);
+        LenText.Text = Fmt(_out - _in);
+        bool trimmed = _in > TimeSpan.Zero || _out < _duration - TimeSpan.FromMilliseconds(50);
+        ExportText.Text = trimmed || _cropMode != "none" ? "Export" : "Export copy";
+    }
+
+    double TrackWidth => Math.Max(1, Timeline.ActualWidth);
+
+    double X(TimeSpan t) => _duration.TotalMilliseconds <= 0 ? 0 : t.TotalMilliseconds / _duration.TotalMilliseconds * TrackWidth;
+
+    TimeSpan T(double x) => TimeSpan.FromMilliseconds(Math.Clamp(x / TrackWidth, 0, 1) * _duration.TotalMilliseconds);
+
+    void UpdateTimeline()
+    {
+        double xi = X(_in), xo = X(_out);
+        Canvas.SetLeft(SelBand, xi);
+        SelBand.Width = Math.Max(0, xo - xi);
+        Canvas.SetLeft(InHandle, xi - InHandle.Width);
+        Canvas.SetLeft(OutHandle, xo);
+        var pos = _opened ? Player.Position : TimeSpan.Zero;
+        Canvas.SetLeft(Playhead, Math.Clamp(X(pos) - 1, 0, TrackWidth - 2));
+        TimeText.Text = $"{Fmt(pos)} / {Fmt(_duration)}";
+    }
+
+    void Timeline_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateTimeline();
+
+    enum Drag { None, In, Out, Scrub }
+    Drag _drag;
+    bool _wasPlaying;
+
+    void Timeline_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_duration <= TimeSpan.Zero) return;
+        double x = e.GetPosition(Timeline).X;
+        double xi = X(_in), xo = X(_out);
+        if (Math.Abs(x - (xi - 5)) <= 10) _drag = Drag.In;
+        else if (Math.Abs(x - (xo + 5)) <= 10) _drag = Drag.Out;
+        else
+        {
+            _drag = Drag.Scrub;
+            _wasPlaying = _playing;
+            if (_playing) Pause();
+            Seek(T(x));
+        }
+        Timeline.CaptureMouse();
+        Focus();
+        e.Handled = true;
+    }
+
+    void Timeline_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_drag == Drag.None) return;
+        var t = T(e.GetPosition(Timeline).X);
+        switch (_drag)
+        {
+            case Drag.In: SetIn(t); Seek(_in); break;
+            case Drag.Out: SetOut(t); Seek(_out); break;
+            case Drag.Scrub: Seek(t); break;
+        }
+    }
+
+    void Timeline_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_drag == Drag.Scrub && _wasPlaying) Play();
+        _drag = Drag.None;
+        Timeline.ReleaseMouseCapture();
+    }
+
+    // ===================== crop =====================
+
+    void CropPreset_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton { Tag: string tag }) SetCropMode(tag);
+    }
+
+    void SetCropMode(string mode)
+    {
+        _cropMode = mode;
+        _aspect = mode switch { "16:9" => 16.0 / 9, "9:16" => 9.0 / 16, "1:1" => 1, "4:3" => 4.0 / 3, _ => 0 };
+        if (mode != "none" && _vw > 0)
+        {
+            if (_aspect > 0)
+            {
+                double w = _vw, h = _vw / _aspect;
+                if (h > _vh) { h = _vh; w = _vh * _aspect; }
+                _crop = new Rect((_vw - w) / 2, (_vh - h) / 2, w, h);
+            }
+            else
+            {
+                _crop = new Rect(_vw * 0.1, _vh * 0.1, _vw * 0.8, _vh * 0.8);
+            }
+        }
+        CropLayer.Visibility = mode == "none" ? Visibility.Collapsed : Visibility.Visible;
+        FastToggle.IsEnabled = mode == "none";
+        if (mode != "none") FastToggle.IsChecked = false;
+        if (mode != "none") { Pause(); BigPlay.Visibility = Visibility.Collapsed; }
+        LayoutCrop();
+        UpdateTrimText();
+    }
+
+    void Stage_SizeChanged(object sender, SizeChangedEventArgs e) => LayoutCrop();
+
+    /// <summary>Where the video actually sits inside the stage (letterboxed).</summary>
+    Rect VideoRect()
+    {
+        double W = Stage.ActualWidth, H = Stage.ActualHeight;
+        if (_vw <= 0 || _vh <= 0 || W <= 0 || H <= 0) return Rect.Empty;
+        double s = Math.Min(W / _vw, H / _vh);
+        double w = _vw * s, h = _vh * s;
+        return new Rect((W - w) / 2, (H - h) / 2, w, h);
+    }
+
+    double Scale => VideoRect() is { IsEmpty: false } r ? r.Width / _vw : 1;
+
+    Rect ToScreen(Rect src)
+    {
+        var v = VideoRect();
+        double s = Scale;
+        return new Rect(v.X + src.X * s, v.Y + src.Y * s, src.Width * s, src.Height * s);
+    }
+
+    Point ToSource(Point p)
+    {
+        var v = VideoRect();
+        double s = Scale;
+        return new Point(Math.Clamp((p.X - v.X) / s, 0, _vw), Math.Clamp((p.Y - v.Y) / s, 0, _vh));
+    }
+
+    void LayoutCrop()
+    {
+        if (_cropMode == "none" || _vw <= 0) return;
+        var v = VideoRect();
+        if (v.IsEmpty) return;
+        var r = ToScreen(_crop);
+
+        var g = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        g.Children.Add(new RectangleGeometry(v));
+        g.Children.Add(new RectangleGeometry(r));
+        CropShade.Data = g;
+
+        Place(CropBox, r.X, r.Y, r.Width, r.Height);
+        Place(CropThirdsV, r.X + r.Width / 3, r.Y, r.Width / 3, r.Height);
+        Place(CropThirdsH, r.X, r.Y + r.Height / 3, r.Width, r.Height / 3);
+        PlaceHandle(HandleTL, r.Left, r.Top);
+        PlaceHandle(HandleTR, r.Right, r.Top);
+        PlaceHandle(HandleBL, r.Left, r.Bottom);
+        PlaceHandle(HandleBR, r.Right, r.Bottom);
+
+        var (cw, ch) = EvenSize();
+        CropSizeText.Text = $"{cw}×{ch}";
+        Canvas.SetLeft(CropSizeChip, r.X + 8);
+        Canvas.SetTop(CropSizeChip, r.Y + 8);
+    }
+
+    static void Place(FrameworkElement el, double x, double y, double w, double h)
+    {
+        Canvas.SetLeft(el, x);
+        Canvas.SetTop(el, y);
+        el.Width = Math.Max(0, w);
+        el.Height = Math.Max(0, h);
+    }
+
+    static void PlaceHandle(FrameworkElement h, double x, double y)
+    {
+        Canvas.SetLeft(h, x - h.Width / 2);
+        Canvas.SetTop(h, y - h.Height / 2);
+    }
+
+    (int w, int h) EvenSize() => ((int)_crop.Width / 2 * 2, (int)_crop.Height / 2 * 2);
+
+    enum CropDrag { None, Move, Resize }
+    CropDrag _cropDrag;
+    Point _dragStart;   // source coords
+    Rect _cropStart;
+    Point _anchor;      // fixed corner while resizing (source coords)
+
+    void Crop_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_vw <= 0) return;
+        var p = e.GetPosition(CropLayer);
+        var r = ToScreen(_crop);
+        var corners = new[] { r.TopLeft, r.TopRight, r.BottomLeft, r.BottomRight };
+        var opposite = new[] { _crop.BottomRight, _crop.BottomLeft, _crop.TopRight, _crop.TopLeft };
+        _cropDrag = CropDrag.None;
+        for (int i = 0; i < 4; i++)
+        {
+            if ((corners[i] - p).Length <= 14)
+            {
+                _cropDrag = CropDrag.Resize;
+                _anchor = opposite[i];
+                break;
+            }
+        }
+        if (_cropDrag == CropDrag.None && r.Contains(p)) _cropDrag = CropDrag.Move;
+        if (_cropDrag == CropDrag.None && _aspect == 0)
+        {
+            // free mode: draw a new box
+            var s = ToSource(p);
+            _anchor = s;
+            _crop = new Rect(s, new Size(1, 1));
+            _cropDrag = CropDrag.Resize;
+        }
+        _dragStart = ToSource(p);
+        _cropStart = _crop;
+        CropLayer.CaptureMouse();
+        Focus();
+        e.Handled = true;
+    }
+
+    void Crop_MouseMove(object sender, MouseEventArgs e)
+    {
+        var p = e.GetPosition(CropLayer);
+        if (_cropDrag == CropDrag.None)
+        {
+            var r = ToScreen(_crop);
+            bool nearCorner = (r.TopLeft - p).Length <= 14 || (r.BottomRight - p).Length <= 14;
+            bool nearOther = (r.TopRight - p).Length <= 14 || (r.BottomLeft - p).Length <= 14;
+            CropLayer.Cursor = nearCorner ? Cursors.SizeNWSE : nearOther ? Cursors.SizeNESW
+                             : r.Contains(p) ? Cursors.SizeAll : (_aspect == 0 ? Cursors.Cross : Cursors.Arrow);
+            return;
+        }
+        var s = ToSource(p);
+        if (_cropDrag == CropDrag.Move)
+        {
+            double x = Math.Clamp(_cropStart.X + (s.X - _dragStart.X), 0, _vw - _cropStart.Width);
+            double y = Math.Clamp(_cropStart.Y + (s.Y - _dragStart.Y), 0, _vh - _cropStart.Height);
+            _crop = new Rect(x, y, _cropStart.Width, _cropStart.Height);
+        }
+        else
+        {
+            double dx = s.X - _anchor.X, dy = s.Y - _anchor.Y;
+            double w = Math.Abs(dx), h = Math.Abs(dy);
+            if (_aspect > 0)
+            {
+                // follow whichever axis the mouse moved more, keep the ratio, stay inside the frame
+                if (w / _aspect > h) h = w / _aspect; else w = h * _aspect;
+                double maxW = dx >= 0 ? _vw - _anchor.X : _anchor.X;
+                double maxH = dy >= 0 ? _vh - _anchor.Y : _anchor.Y;
+                if (w > maxW) { w = maxW; h = w / _aspect; }
+                if (h > maxH) { h = maxH; w = h * _aspect; }
+            }
+            w = Math.Max(w, 32);
+            h = Math.Max(h, _aspect > 0 ? 32 / _aspect : 32);
+            double x = dx >= 0 ? _anchor.X : _anchor.X - w;
+            double y = dy >= 0 ? _anchor.Y : _anchor.Y - h;
+            x = Math.Clamp(x, 0, _vw - w);
+            y = Math.Clamp(y, 0, _vh - h);
+            _crop = new Rect(x, y, Math.Min(w, _vw), Math.Min(h, _vh));
+        }
+        LayoutCrop();
+    }
+
+    void Crop_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _cropDrag = CropDrag.None;
+        CropLayer.ReleaseMouseCapture();
+    }
+
+    // ===================== export =====================
+
+    void Fast_Click(object sender, RoutedEventArgs e) { }
+
+    async void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (_path == null || _settings == null) return;
+        if (IsBusy) { _exportCts?.Cancel(); return; }
+        if (_duration <= TimeSpan.Zero)
+        {
+            ShowStatus("This file couldn't be read.", error: true);
+            return;
+        }
+
+        bool replace = SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
+        var audioTag = (AudioCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        var audio = audioTag switch
+        {
+            "mix" => AudioExport.MixOnly,
+            "none" => AudioExport.None,
+            _ => AudioExport.AllTracks
+        };
+        Int32Rect? crop = null;
+        if (_cropMode != "none" && _vw > 0)
+        {
+            var (cw, ch) = EvenSize();
+            int cx = Math.Clamp((int)Math.Round(_crop.X) / 2 * 2, 0, _vw - cw);
+            int cy = Math.Clamp((int)Math.Round(_crop.Y) / 2 * 2, 0, _vh - ch);
+            crop = new Int32Rect(cx, cy, cw, ch);
+        }
+
+        var source = _path;
+        var output = replace ? source : ClipExporter.NextOutputPath(source);
+        var req = new ExportRequest
+        {
+            Input = source,
+            Output = output,
+            Start = _in,
+            End = _out,
+            Crop = crop,
+            Audio = audio,
+            Fast = FastToggle.IsChecked == true && crop == null,
+        };
+
+        Pause();
+        var keepPos = Player.Position;
+        if (replace) Release(); // the player holds the file open
+
+        _exportCts = new CancellationTokenSource();
+        ExportText.Text = "Cancel";
+        ExportProgress.Visibility = Visibility.Visible;
+        ExportBar.Width = 0;
+        ShowStatus(req.Fast ? "Exporting (fast)…" : "Exporting…");
+        var progress = new Progress<double>(p =>
+        {
+            ExportBar.Width = Math.Max(0, ExportProgress.ActualWidth * p);
+            ExportStatus.Text = $"Exporting… {p * 100:0}%";
+        });
+        try
+        {
+            await Task.Run(() => ClipExporter.ExportAsync(req, _encoder?.Invoke(), _settings.Quality, progress, _exportCts.Token));
+            ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
+            Exported?.Invoke(output);
+        }
+        catch (OperationCanceledException) { ShowStatus("Export cancelled."); }
+        catch (Exception ex) { ShowStatus(ex.Message, error: true); }
+        finally
+        {
+            _exportCts.Dispose();
+            _exportCts = null;
+            ExportProgress.Visibility = Visibility.Collapsed;
+            UpdateTrimText();
+            if (replace && _path != null)
+            {
+                // reopen the (new) file
+                var path = _path;
+                Open(path, _settings, _encoder!);
+                if (crop == null && req.Start == TimeSpan.Zero) Player.Position = Clamp(keepPos, TimeSpan.Zero, _out);
+            }
+        }
+    }
+
+    void ShowStatus(string text, bool error = false)
+    {
+        ExportStatus.Text = text;
+        ExportStatus.Foreground = (Brush)FindResource(error ? "RecBrush" : "MutedBrush");
+        ExportStatus.Visibility = Visibility.Visible;
+    }
+}

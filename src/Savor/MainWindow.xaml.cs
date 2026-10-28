@@ -57,9 +57,12 @@ public partial class MainWindow : Window
     DispatcherTimer? _updateTimer;
     bool _updating;
 
-    public MainWindow(bool startHidden, bool justUpdated = false)
+    readonly string? _editOnStart;
+
+    public MainWindow(bool startHidden, bool justUpdated = false, string? editOnStart = null)
     {
         _justUpdated = justUpdated;
+        _editOnStart = editOnStart;
         InitializeComponent();
         _settings = AppSettings.Load();
         _engine = new CaptureEngine(() => _settings);
@@ -72,7 +75,7 @@ public partial class MainWindow : Window
         _uiTimer.Tick += (_, _) => Tick();
 
         SourceInitialized += (_, _) => OnSourceInitialized();
-        IsVisibleChanged += (_, _) => { if (!IsVisible) ScheduleTrim(); };
+        IsVisibleChanged += (_, _) => { if (!IsVisible) { _editor?.PauseIfPlaying(); ScheduleTrim(); } };
         StateChanged += (_, _) =>
         {
             if (WindowState == WindowState.Minimized) ScheduleTrim();
@@ -138,6 +141,8 @@ public partial class MainWindow : Window
         _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync(userInitiated: false);
         _updateTimer.Start();
         _ = CheckForUpdatesAsync(userInitiated: false);
+
+        if (_editOnStart != null) OpenEditor(_editOnStart);
 
         await DetectEncodersAsync(force: false);
 
@@ -645,10 +650,23 @@ public partial class MainWindow : Window
     void Maximize_Click(object sender, RoutedEventArgs e) =>
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
+    void CapturesTab_Click(object sender, RoutedEventArgs e)
+    {
+        // already on Captures but inside the editor: go back to the grid
+        if (EditorPage.Visibility == Visibility.Visible && _editor is { IsBusy: false }) CloseEditor();
+    }
+
     void Tab_Checked(object sender, RoutedEventArgs e)
     {
         if (StudioPage == null || CapturesPage == null) return;
+        if (_loadingUi) return;
         var target = ReferenceEquals(sender, CapturesTab) ? CapturesPage : StudioPage;
+        if (EditorPage.Visibility == Visibility.Visible)
+        {
+            if (_editor != null) { _editor.Release(); EditorPage.Children.Clear(); _editor = null; }
+            EditorPage.Visibility = Visibility.Collapsed;
+            target.Visibility = Visibility.Collapsed; // let SwitchPage animate it in
+        }
         if (SettingsPage.Visibility == Visibility.Visible)
         {
             if (_capturingHotkey != null) EndHotkeyCapture();
@@ -698,8 +716,49 @@ public partial class MainWindow : Window
 
     static ClipItem? ClipFrom(object sender) => (sender as FrameworkElement)?.DataContext as ClipItem;
 
-    void ClipCard_Click(object sender, MouseButtonEventArgs e) { if (ClipFrom(sender) is { } c) OpenFile(c.FilePath); }
-    void ClipOpen_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenFile(c.FilePath); }
+    void ClipCard_Click(object sender, MouseButtonEventArgs e) { if (ClipFrom(sender) is { } c) OpenEditor(c.FilePath); }
+    void ClipOpen_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenEditor(c.FilePath); }
+    void ClipExternal_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenFile(c.FilePath); }
+
+    // ----- built-in viewer / editor (created on first use, released when closed) -----
+
+    ClipEditor? _editor;
+
+    public void OpenEditor(string path)
+    {
+        if (!File.Exists(path)) { Notify("File not found", Path.GetFileName(path), error: true); return; }
+        if (_editor == null)
+        {
+            _editor = new ClipEditor();
+            _editor.CloseRequested += CloseEditor;
+            _editor.Exported += _ => ReloadClips();
+            EditorPage.Children.Add(_editor);
+        }
+        if (SettingsPage.Visibility == Visibility.Visible) SettingsPage.Visibility = Visibility.Collapsed;
+        _loadingUi = true;
+        CapturesTab.IsChecked = true;
+        _loadingUi = false;
+        StudioPage.Visibility = Visibility.Collapsed;
+        var from = CapturesPage.Visibility == Visibility.Visible ? (FrameworkElement)CapturesPage : StudioPage;
+        SwitchPage(EditorPage, from);
+        CapturesPage.Visibility = Visibility.Collapsed;
+        _editor.Open(path, _settings, () => _engine.Encoder?.Def);
+    }
+
+    void CloseEditor()
+    {
+        if (_editor != null)
+        {
+            _editor.Release();
+            EditorPage.Children.Clear();   // drop the whole editor so its video memory goes too
+            _editor = null;
+        }
+        SwitchPage(CapturesPage, EditorPage);
+        _mainPage = CapturesPage;
+        ReloadClips();
+        // give the decoder's memory back now rather than at the next GC
+        Dispatcher.BeginInvoke(() => GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, true, true), DispatcherPriority.ApplicationIdle);
+    }
     void ClipReveal_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) Reveal(c.FilePath); }
 
     void ClipCopy_Click(object sender, RoutedEventArgs e)
@@ -1092,6 +1151,13 @@ public partial class MainWindow : Window
         if (SettingsPage.Visibility == Visibility.Visible) { _ = BackAsync(); return; }
         LoadSettingsIntoUi();
         ApplyNote.Visibility = _engine.Recording && _captureDirty ? Visibility.Visible : Visibility.Collapsed;
+        if (EditorPage.Visibility == Visibility.Visible)
+        {
+            if (_editor != null) { _editor.Release(); EditorPage.Children.Clear(); _editor = null; }
+            EditorPage.Visibility = Visibility.Collapsed;
+            CapturesPage.Visibility = Visibility.Visible;
+            _mainPage = CapturesPage;
+        }
         var current = StudioPage.Visibility == Visibility.Visible ? (FrameworkElement)StudioPage : CapturesPage;
         SwitchPage(SettingsPage, current);
     }

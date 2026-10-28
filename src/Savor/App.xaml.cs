@@ -45,7 +45,14 @@ public partial class App : Application
         base.OnStartup(e);
         bool minimized = e.Args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
         if (updated) System.Threading.Tasks.Task.Run(Savor.Core.Updater.CleanupOld);
-        var window = new MainWindow(minimized, updated);
+        // "Savor.exe clip.mp4" or "--edit clip.mp4" opens a file in the viewer/editor
+        string? edit = null;
+        for (int i = 0; i < e.Args.Length; i++)
+        {
+            if (e.Args[i].Equals("--edit", StringComparison.OrdinalIgnoreCase) && i + 1 < e.Args.Length) edit = e.Args[i + 1];
+            else if (!e.Args[i].StartsWith("--") && System.IO.File.Exists(e.Args[i])) edit = e.Args[i];
+        }
+        var window = new MainWindow(minimized, updated, edit);
         MainWindow = window;
         if (!minimized) window.Show();
     }
