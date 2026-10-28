@@ -22,10 +22,13 @@ jobs:
       - name: Fetch FFmpeg (embedded into Savor.exe)
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          # Pinned to the stable 7.1 branch so FFmpeg option changes can't break Savor unexpectedly.
+          $base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+          try { Invoke-WebRequest "$base/ffmpeg-n7.1-latest-win64-gpl-7.1.zip" -OutFile ffmpeg.zip }
+          catch { Write-Warning "7.1 build not found, using master"; Invoke-WebRequest "$base/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip }
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
           $exe = Get-ChildItem ffmpeg-dl -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          & $exe.FullName -hide_banner -version | Select-Object -First 1
           & $exe.FullName -hide_banner -filters | Select-String ddagrab
           New-Item -ItemType Directory -Force ffmpeg | Out-Null
           $in = [IO.File]::OpenRead($exe.FullName)

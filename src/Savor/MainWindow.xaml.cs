@@ -38,8 +38,14 @@ public partial class MainWindow : Window
     Storyboard? _pulseLive, _pulseRec;
     bool _liveAnimating, _recAnimating;
 
-    public MainWindow(bool startHidden)
+    readonly bool _justUpdated;
+    UpdateInfo? _update;
+    DispatcherTimer? _updateTimer;
+    bool _updating;
+
+    public MainWindow(bool startHidden, bool justUpdated = false)
     {
+        _justUpdated = justUpdated;
         InitializeComponent();
         _settings = AppSettings.Load();
         _engine = new CaptureEngine(() => _settings);
@@ -103,6 +109,12 @@ public partial class MainWindow : Window
             RecordButton.IsEnabled = false;
             return;
         }
+
+        if (_justUpdated) Notify($"Updated to Savor {Updater.Current}", "You're on the latest version.");
+        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(6) };
+        _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync(userInitiated: false);
+        _updateTimer.Start();
+        _ = CheckForUpdatesAsync(userInitiated: false);
 
         await DetectEncodersAsync(force: false);
 
@@ -522,8 +534,8 @@ public partial class MainWindow : Window
             TrayToggle.IsChecked = _settings.CloseToTray;
             NotifyToggle.IsChecked = _settings.ShowNotifications;
 
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            AboutText.Text = $"Savor {ver?.ToString(3)}  ·  FFmpeg: {Ffmpeg.Path ?? "not found"}";
+            VersionText.Text = $"Savor {Updater.Current}";
+            AboutText.Text = $"FFmpeg: {Ffmpeg.Path ?? "not found"}";
         }
         finally { _loadingUi = false; }
     }
@@ -744,6 +756,61 @@ public partial class MainWindow : Window
         _engine.Dispose();
         Close();
         Application.Current.Shutdown();
+    }
+
+    // ===================== updates =====================
+
+    async Task CheckForUpdatesAsync(bool userInitiated)
+    {
+        if (_updating) return;
+        if (userInitiated)
+        {
+            CheckUpdatesButton.IsEnabled = false;
+            UpdateStatusText.Text = "Checking…";
+        }
+        var info = await Updater.CheckAsync();
+        _update = info;
+        if (info != null)
+        {
+            UpdateText.Text = $"Update to {info.Version}";
+            UpdateButton.Visibility = Visibility.Visible;
+            UpdateStatusText.Text = $"Version {info.Version} is available. Use the Update button at the top.";
+            if (!userInitiated && !IsVisible)
+                Notify("Savor update available", $"Version {info.Version} — open Savor and click Update.");
+        }
+        else if (userInitiated)
+        {
+            UpdateStatusText.Text = $"You're up to date (checked {DateTime.Now:h:mm tt}).";
+        }
+        CheckUpdatesButton.IsEnabled = true;
+    }
+
+    void CheckUpdates_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
+
+    async void Update_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update == null || _updating) return;
+        if (_engine.Recording)
+        {
+            Notify("Recording in progress", "Stop the recording first, then update.", error: true);
+            return;
+        }
+        _updating = true;
+        UpdateButton.IsEnabled = false;
+        var progress = new Progress<double>(p => UpdateText.Text = $"Downloading {p * 100:0}%");
+        try
+        {
+            await Updater.InstallAsync(_update, progress);
+            UpdateText.Text = "Restarting…";
+            await ExitAsync(); // the new Savor waits for this one to close
+        }
+        catch (Exception ex)
+        {
+            _updating = false;
+            UpdateButton.IsEnabled = true;
+            UpdateText.Text = $"Update to {_update.Version}";
+            ShowError("Update failed: " + ex.Message);
+        }
     }
 
     [DllImport("dwmapi.dll")]

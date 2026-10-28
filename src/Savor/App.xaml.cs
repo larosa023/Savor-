@@ -16,7 +16,14 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        bool updated = e.Args.Any(a => a.Equals("--updated", StringComparison.OrdinalIgnoreCase));
         _mutex = new Mutex(true, MutexName, out bool isFirst);
+        if (!isFirst && updated)
+        {
+            // Just updated: the previous Savor is still shutting down. Wait for it.
+            try { isFirst = _mutex.WaitOne(TimeSpan.FromSeconds(30)); }
+            catch (AbandonedMutexException) { isFirst = true; }
+        }
         if (!isFirst)
         {
             // Another Savor is running: ask it to show itself and quit.
@@ -37,7 +44,8 @@ public partial class App : Application
 
         base.OnStartup(e);
         bool minimized = e.Args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
-        var window = new MainWindow(minimized);
+        if (updated) System.Threading.Tasks.Task.Run(Savor.Core.Updater.CleanupOld);
+        var window = new MainWindow(minimized, updated);
         MainWindow = window;
         if (!minimized) window.Show();
     }

@@ -124,6 +124,14 @@
                     </Border>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button x:Name="UpdateButton" Style="{StaticResource PrimaryButton}" Padding="12,5" Margin="0,0,8,0"
+                            FontSize="12" Visibility="Collapsed" Click="Update_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE896;" FontSize="12" Margin="0,0,7,0"/>
+                            <TextBlock x:Name="UpdateText" Text="Update"/>
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="SettingsButton" Style="{StaticResource CaptionButton}" Click="Settings_Click"
                             WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Settings">
                         <TextBlock Style="{StaticResource Icon}" Text="&#xE713;" FontSize="15"/>
@@ -526,8 +534,20 @@
                             </StackPanel>
                         </Border>
 
-                        <TextBlock x:Name="AboutText" Style="{StaticResource Muted}" FontSize="11.5" Margin="4,20,0,0"
-                                   Foreground="{StaticResource FaintBrush}"/>
+                        <TextBlock Text="About" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <DockPanel>
+                                <Button x:Name="CheckUpdatesButton" DockPanel.Dock="Right" Style="{StaticResource BaseButton}"
+                                        Content="Check for updates" FontWeight="Normal" Click="CheckUpdates_Click"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="VersionText" Text="Savor" Style="{StaticResource RowTitle}"/>
+                                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource RowDesc}"
+                                               Text="Savor checks for updates automatically and shows an Update button when one is ready."/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <TextBlock x:Name="AboutText" Style="{StaticResource Muted}" FontSize="11.5" Margin="4,14,0,0"
+                                   Foreground="{StaticResource FaintBrush}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>

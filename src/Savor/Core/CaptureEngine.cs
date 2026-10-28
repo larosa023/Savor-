@@ -278,7 +278,7 @@ public sealed class CaptureEngine : IDisposable
 
         if (audio)
         {
-            a.AddRange(new[] { "-thread_queue_size", "4096", "-f", "f32le", "-ar", rate.ToString(), "-ac", "2",
+            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", "2",
                                "-i", "pipe:0" });
         }
 
