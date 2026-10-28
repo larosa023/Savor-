@@ -85,8 +85,16 @@ public sealed class ClipAudio : IDisposable
 
         _file = file;
         _reader = new Source(file) { Volume = _muted ? 0 : _volume };
-        _out = new WasapiOut(AudioClientShareMode.Shared, true, 40);
-        _out.Init(_reader);
+        try
+        {
+            _out = new WasapiOut(AudioClientShareMode.Shared, true, 40);
+            _out.Init(_reader);
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            Close();
+            throw new InvalidOperationException("No speakers or headphones found to play the audio.");
+        }
     }
 
     public bool Ready => _out != null;
