@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -83,6 +84,9 @@ public partial class ClipEditor : UserControl
         UpdatePlayIcon();
 
         Player.Volume = VolumeSlider.Value;
+        // Most videos are "limited range"; Windows' player doesn't expand that, so do it on the GPU.
+        Player.Effect = Shaders.ExpandRangeEffect.TryCreate();
+        _ = DetectRangeAsync(path);
         Player.Source = new Uri(path);
         Player.Pause(); // opens the file and shows the first frame
         _clockBase = TimeSpan.Zero;
@@ -167,6 +171,20 @@ public partial class ClipEditor : UserControl
     }
 
     void Player_MediaEnded(object sender, RoutedEventArgs e) => Pause();
+
+    /// <summary>Full-range files (rare) must not be expanded again.</summary>
+    async Task DetectRangeAsync(string path)
+    {
+        if (Ffmpeg.Path == null) return;
+        try
+        {
+            var (_, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", path }, TimeSpan.FromSeconds(10));
+            var video = err.Split('\n').FirstOrDefault(l => l.Contains("Video:")) ?? "";
+            bool full = video.Contains("(pc") || video.Contains("yuvj");
+            if (_path == path && full) Player.Effect = null;
+        }
+        catch { }
+    }
 
     void StartFilmstrip()
     {

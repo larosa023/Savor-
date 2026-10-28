@@ -41,6 +41,15 @@ jobs:
           $gz = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
           $in.CopyTo($gz); $gz.Dispose(); $out.Dispose(); $in.Dispose()
 
+      - name: Compile shaders
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter fxc.exe |
+            Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          Write-Host "::notice::fxc: $($fxc.FullName)"
+          & $fxc.FullName /nologo /T ps_2_0 /E main /O3 /Fo src/Savor/Shaders/ExpandRange.ps src/Savor/Shaders/ExpandRange.hlsl
+          if (-not (Test-Path src/Savor/Shaders/ExpandRange.ps)) { throw "shader compile failed" }
+
       - name: Publish Savor.exe
         run: >
           dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true

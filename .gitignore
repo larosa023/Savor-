@@ -5,3 +5,4 @@ publish/
 *.user
 *.suo
 ffmpeg/
+src/Savor/Shaders/*.ps
