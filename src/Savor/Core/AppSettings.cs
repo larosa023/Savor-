@@ -12,11 +12,14 @@ public sealed class HotkeyBinding
 {
     public ModifierKeys Modifiers { get; set; }
     public Key Key { get; set; }
+    /// <summary>"XButton1", "XButton2" or "Middle" for mouse-button hotkeys; null for keys.</summary>
+    public string? Mouse { get; set; }
 
     public HotkeyBinding() { }
     public HotkeyBinding(ModifierKeys modifiers, Key key) { Modifiers = modifiers; Key = key; }
+    public static HotkeyBinding ForMouse(ModifierKeys modifiers, string button) => new() { Modifiers = modifiers, Mouse = button };
 
-    public bool IsEmpty => Key == Key.None;
+    public bool IsEmpty => Key == Key.None && string.IsNullOrEmpty(Mouse);
 
     public override string ToString()
     {
@@ -26,7 +29,13 @@ public sealed class HotkeyBinding
         if (Modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
         if (Modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
         if (Modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
-        parts.Add(KeyName(Key));
+        parts.Add(Mouse switch
+        {
+            "XButton1" => "Mouse 4",
+            "XButton2" => "Mouse 5",
+            "Middle" => "Middle click",
+            _ => KeyName(Key)
+        });
         return string.Join(" + ", parts);
     }
 
@@ -38,6 +47,36 @@ public sealed class HotkeyBinding
         Key.OemMinus => "-",
         Key.OemPlus => "=",
         Key.Snapshot => "PrtSc",
+        Key.Back => "Backspace",
+        Key.Return => "Enter",
+        Key.Space => "Space",
+        Key.Escape => "Esc",
+        Key.Capital => "Caps Lock",
+        Key.NumLock => "Num Lock",
+        Key.LeftCtrl => "Left Ctrl",
+        Key.RightCtrl => "Right Ctrl",
+        Key.LeftAlt => "Left Alt",
+        Key.RightAlt => "Right Alt",
+        Key.LeftShift => "Left Shift",
+        Key.RightShift => "Right Shift",
+        Key.LWin => "Left Win",
+        Key.RWin => "Right Win",
+        Key.Multiply => "Num *",
+        Key.Add => "Num +",
+        Key.Subtract => "Num -",
+        Key.Divide => "Num /",
+        Key.Decimal => "Num .",
+        Key.OemComma => ",",
+        Key.OemPeriod => ".",
+        Key.OemQuestion => "/",
+        Key.OemSemicolon => ";",
+        Key.OemQuotes => "'",
+        Key.OemOpenBrackets => "[",
+        Key.OemCloseBrackets => "]",
+        Key.OemPipe => "\\",
+        Key.MediaPlayPause => "Play/Pause",
+        Key.MediaNextTrack => "Next track",
+        Key.MediaPreviousTrack => "Previous track",
         Key.Scroll => "ScrLk",
         Key.Pause => "Pause",
         Key.Insert => "Ins",

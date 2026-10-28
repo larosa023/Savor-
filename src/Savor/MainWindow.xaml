@@ -675,24 +675,42 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <DockPanel>
-                                    <Button x:Name="SaveClipHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
-                                            Tag="save" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Padding="9,6" Margin="0,0,6,0" Tag="save"
+                                                Click="HotkeyClear_Click" ToolTip="Remove this shortcut">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                                        </Button>
+                                        <Button x:Name="SaveClipHotkeyButton" Style="{StaticResource HotkeyButton}"
+                                            Tag="save" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" PreviewKeyUp="Hotkey_KeyUp" PreviewMouseDown="Hotkey_MouseDown" LostFocus="Hotkey_LostFocus"/>
+                                    </StackPanel>
                                     <TextBlock Text="Save clip" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
                                 <DockPanel>
-                                    <Button x:Name="RecordHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
-                                            Tag="record" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Padding="9,6" Margin="0,0,6,0" Tag="record"
+                                                Click="HotkeyClear_Click" ToolTip="Remove this shortcut">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                                        </Button>
+                                        <Button x:Name="RecordHotkeyButton" Style="{StaticResource HotkeyButton}"
+                                            Tag="record" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" PreviewKeyUp="Hotkey_KeyUp" PreviewMouseDown="Hotkey_MouseDown" LostFocus="Hotkey_LostFocus"/>
+                                    </StackPanel>
                                     <TextBlock Text="Start / stop recording" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
                                 <DockPanel>
-                                    <Button x:Name="BufferHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
-                                            Tag="buffer" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Padding="9,6" Margin="0,0,6,0" Tag="buffer"
+                                                Click="HotkeyClear_Click" ToolTip="Remove this shortcut">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                                        </Button>
+                                        <Button x:Name="BufferHotkeyButton" Style="{StaticResource HotkeyButton}"
+                                            Tag="buffer" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" PreviewKeyUp="Hotkey_KeyUp" PreviewMouseDown="Hotkey_MouseDown" LostFocus="Hotkey_LostFocus"/>
+                                    </StackPanel>
                                     <TextBlock Text="Turn replay buffer on / off" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
                                 </DockPanel>
                                 <TextBlock x:Name="HotkeyNote" Style="{StaticResource RowDesc}" Margin="0,14,0,0"
-                                           Text="Click a shortcut, then press the new keys. Backspace clears it, Esc cancels."/>
+                                           Text="Click a shortcut, then press any key or combo — even Delete, a lone Ctrl, or mouse 4/5. Esc cancels, × removes it."/>
                             </StackPanel>
                         </Border>
 

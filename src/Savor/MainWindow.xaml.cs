@@ -734,18 +734,22 @@ public partial class MainWindow : Window
 
     // ===================== hotkeys =====================
 
+    const string HotkeyHelp = "Click a shortcut, then press any key or combo — even Delete, a lone Ctrl, or mouse 4/5. Esc cancels, × removes it.";
+
     void RegisterHotkeys()
     {
         if (_hotkeys == null) return;
         _hotkeys.UnregisterAll();
-        var failed = new List<string>();
-        if (!_hotkeys.Register(_settings.SaveClipHotkey, () => _ = SaveClipAsync())) failed.Add(_settings.SaveClipHotkey.ToString());
-        if (!_hotkeys.Register(_settings.RecordHotkey, () => _ = ToggleRecordAsync())) failed.Add(_settings.RecordHotkey.ToString());
-        if (!_hotkeys.Register(_settings.BufferHotkey, () => _ = ToggleBufferAsync())) failed.Add(_settings.BufferHotkey.ToString());
-        HotkeyNote.Text = failed.Count == 0
-            ? "Click a shortcut, then press the new keys. Backspace clears it, Esc cancels."
-            : $"Already used by another app: {string.Join(", ", failed)}. Pick a different combination.";
-        HotkeyNote.Foreground = (Brush)FindResource(failed.Count == 0 ? "MutedBrush" : "RecBrush");
+        _hotkeys.Register(_settings.SaveClipHotkey, () => _ = SaveClipAsync());
+        _hotkeys.Register(_settings.RecordHotkey, () => _ = ToggleRecordAsync());
+        _hotkeys.Register(_settings.BufferHotkey, () => _ = ToggleBufferAsync());
+
+        // flag the same shortcut used for two actions
+        var all = new[] { _settings.SaveClipHotkey, _settings.RecordHotkey, _settings.BufferHotkey }
+            .Where(h => !h.IsEmpty).Select(h => h.ToString()).ToList();
+        var dupes = all.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        HotkeyNote.Text = dupes.Count == 0 ? HotkeyHelp : $"{string.Join(", ", dupes)} is set for more than one action — it will trigger both.";
+        HotkeyNote.Foreground = (Brush)FindResource(dupes.Count == 0 ? "MutedBrush" : "RecBrush");
     }
 
     HotkeyBinding BindingFor(Button b) => (string)b.Tag switch
@@ -765,6 +769,8 @@ public partial class MainWindow : Window
         }
     }
 
+    Key _pendingModifier = Key.None;
+
     void Hotkey_Click(object sender, RoutedEventArgs e)
     {
         var b = (Button)sender;
@@ -773,38 +779,89 @@ public partial class MainWindow : Window
         if (InputManager.Current.MostRecentInputDevice is KeyboardDevice) return;
         if (_capturingHotkey != null) EndHotkeyCapture();
         _capturingHotkey = b;
-        _hotkeys?.UnregisterAll(); // so pressing the current combo doesn't fire it
-        b.Content = "Press keys…";
+        _pendingModifier = Key.None;
+        if (_hotkeys != null) _hotkeys.Suspended = true; // so pressing the current combo doesn't fire it
+        b.Content = "Press a key…";
         b.BorderBrush = (Brush)FindResource("AccentBrush");
         b.Focus();
     }
+
+    static bool IsModifier(Key k) => k is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+        or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin;
 
     void Hotkey_KeyDown(object sender, KeyEventArgs e)
     {
         if (_capturingHotkey != sender) return;
         e.Handled = true;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift
-            or Key.LWin or Key.RWin or Key.ImeProcessed or Key.DeadCharProcessed)
-            return; // wait for a real key
+        var key = e.Key switch { Key.System => e.SystemKey, Key.ImeProcessed => e.ImeProcessedKey, _ => e.Key };
+        if (key is Key.DeadCharProcessed or Key.None) return;
 
-        var b = (Button)sender;
-        if (key == Key.Escape) { EndHotkeyCapture(); return; }
-        if (key == Key.Back) { SetBinding(b, new HotkeyBinding()); }
-        else
+        if (IsModifier(key))
         {
-            var mods = Keyboard.Modifiers;
-            bool isFKey = key >= Key.F1 && key <= Key.F24;
-            if (mods == ModifierKeys.None && !isFKey && key is not (Key.Snapshot or Key.Scroll or Key.Pause))
-            {
-                HotkeyNote.Text = "Add Ctrl, Alt or Shift (plain F-keys are fine on their own).";
-                HotkeyNote.Foreground = (Brush)FindResource("RecBrush");
-                return;
-            }
-            SetBinding(b, new HotkeyBinding(mods, key));
+            // might become a lone-modifier hotkey if released without another key
+            if (!e.IsRepeat) _pendingModifier = key;
+            ((Button)sender).Content = ModifierPreview(Keyboard.Modifiers) + "…";
+            return;
         }
+        _pendingModifier = Key.None;
+        if (key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None) { EndHotkeyCapture(); return; }
+
+        SetBinding((Button)sender, new HotkeyBinding(Keyboard.Modifiers, key));
         _settings.Save();
         EndHotkeyCapture();
+    }
+
+    void Hotkey_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (_capturingHotkey != sender) return;
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (_pendingModifier != Key.None && key == _pendingModifier)
+        {
+            SetBinding((Button)sender, new HotkeyBinding(ModifierKeys.None, key));
+            _pendingModifier = Key.None;
+            _settings.Save();
+            EndHotkeyCapture();
+        }
+    }
+
+    void Hotkey_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_capturingHotkey != sender) return;
+        string? button = e.ChangedButton switch
+        {
+            MouseButton.XButton1 => "XButton1",
+            MouseButton.XButton2 => "XButton2",
+            MouseButton.Middle => "Middle",
+            _ => null
+        };
+        if (button == null) return; // left/right clicks just interact with the button
+        e.Handled = true;
+        SetBinding((Button)sender, HotkeyBinding.ForMouse(Keyboard.Modifiers, button));
+        _settings.Save();
+        EndHotkeyCapture();
+    }
+
+    void HotkeyClear_Click(object sender, RoutedEventArgs e)
+    {
+        var tag = (string)((Button)sender).Tag;
+        var target = tag switch { "save" => SaveClipHotkeyButton, "record" => RecordHotkeyButton, _ => BufferHotkeyButton };
+        if (_capturingHotkey != null) EndHotkeyCapture();
+        SetBinding(target, new HotkeyBinding());
+        _settings.Save();
+        target.Content = BindingFor(target).ToString();
+        RegisterHotkeys();
+        RefreshState();
+    }
+
+    static string ModifierPreview(ModifierKeys m)
+    {
+        var parts = new List<string>();
+        if (m.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (m.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (m.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        if (m.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
+        return string.Join(" + ", parts) + " +";
     }
 
     void Hotkey_LostFocus(object sender, RoutedEventArgs e)
@@ -821,6 +878,7 @@ public partial class MainWindow : Window
             b.ClearValue(BorderBrushProperty);
             b.Content = BindingFor(b).ToString();
         }
+        if (_hotkeys != null) _hotkeys.Suspended = false;
         RegisterHotkeys();
         RefreshState();
     }
