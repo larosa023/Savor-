@@ -32,23 +32,25 @@ public sealed class Filmstrip : IDisposable
     {
         if (Ffmpeg.Path == null || duration <= TimeSpan.Zero) return null;
         double secs = duration.TotalSeconds;
-        double fps = Math.Clamp(240 / secs, 0.1, 10);
+        // up to 240 frames; clips up to 2 min get at least 2 frames per second
+        bool keyOnly = secs > 120; // long recordings: keyframes only (every 2 s), very fast
+        double fps = keyOnly ? Math.Max(0.05, 240 / secs) : Math.Clamp(240 / secs, 2, 10);
         var strip = new Filmstrip(fps);
-        // long files: decode keyframes only (fast); short clips: decode everything for exact frames
-        bool keyOnly = secs > 120;
         _ = Task.Run(() => strip.Run(path, fps, keyOnly));
         return strip;
     }
 
     void Run(string path, double fps, bool keyOnly)
     {
-        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "2" };
+        // GPU decoding when available keeps this quick even for 1440p/4K clips
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-hwaccel", "auto", "-threads", "2" };
         if (keyOnly) args.AddRange(new[] { "-skip_frame", "nokey" });
         args.AddRange(new[]
         {
             "-i", path, "-an", "-sn",
-            "-vf", $"fps={fps.ToString("0.####", CultureInfo.InvariantCulture)},scale=384:-2:flags=fast_bilinear",
-            "-c:v", "mjpeg", "-q:v", "7", "-f", "image2pipe", "pipe:1"
+            // 960 px wide, area downscaling keeps text and UI sharp
+            "-vf", $"fps={fps.ToString("0.####", CultureInfo.InvariantCulture)},scale='min(960,iw)':-2:flags=area",
+            "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "pipe:1"
         });
         try
         {

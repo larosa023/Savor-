@@ -499,10 +499,19 @@ public partial class ClipEditor : UserControl
             var frame = _strip?.FrameAt(ps);
             if (frame != null)
             {
-                // instant: a small pre-made frame, no video seek at all
-                _hideScrub?.Stop();
-                if (!ReferenceEquals(ScrubFrame.Source, frame)) ScrubFrame.Source = frame;
-                ScrubFrame.Visibility = Visibility.Visible;
+                // instant: a pre-made preview frame, no video seek at all
+                if (now - _lastMoveTicks < 120)
+                {
+                    _hideScrub?.Stop();
+                    if (!ReferenceEquals(ScrubFrame.Source, frame)) ScrubFrame.Source = frame;
+                    ScrubFrame.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    // you've paused on a spot: show the real full-quality frame
+                    FlushSeek(ps);
+                    EndScrubPreview();
+                }
             }
             else
             {
@@ -530,7 +539,9 @@ public partial class ClipEditor : UserControl
         _hideScrub ??= new DispatcherTimer(TimeSpan.FromMilliseconds(180), DispatcherPriority.Background, (_, _) =>
         {
             _hideScrub!.Stop();
-            if (_drag == Drag.None) { ScrubFrame.Visibility = Visibility.Collapsed; ScrubFrame.Source = null; }
+            // hide once the video has caught up, unless the drag started moving again
+            if (_drag == Drag.None || Environment.TickCount64 - _lastMoveTicks >= 150)
+                ScrubFrame.Visibility = Visibility.Collapsed;
         }, Dispatcher);
         _hideScrub.Stop();
         _hideScrub.Start();
