@@ -17,7 +17,8 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 - **Multiple audio tracks** — track 1 is the full mix (what players and Discord play), track 2 is desktop audio only, track 3 is your mic only. Turn it off in Settings → Audio for a single track.
 - **Lightweight** — about 50 MB of memory with the window open and about 25 MB in the tray (plus the FFmpeg capture process).
 - **Global hotkeys** that work while you're in a game, and a tray icon so Savor stays out of the way.
-- **Recent captures** gallery with thumbnails — click to play, right-click to copy the file (paste straight into Discord), show in folder, or delete.
+- **Captures library** with thumbnails — right-click to copy the file (paste straight into Discord), show in folder, or delete.
+- **Built-in viewer & editor** — click any capture to play it inside Savor, trim it (drag handles or I / O), crop it (free, 16:9, 9:16 for Shorts/TikTok, 1:1, 4:3), choose which audio tracks to keep, and export with your GPU encoder. Fast export does lossless trims instantly. Shortcuts: Space play/pause, ← / → step, Shift + ← / → 5 s, Esc back.
 - Quiet notifications that never steal focus from your game.
 - MP4 or MKV output, launch-at-startup, monitor picker, 30–240 fps.
 
