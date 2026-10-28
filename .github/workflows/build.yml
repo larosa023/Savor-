@@ -136,6 +136,26 @@ jobs:
           Stop-Process -Id $p.Id -Force
           Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
+          # color-range check: how does the built-in player show limited vs full range black/white?
+          function Probe-Clip($name, $encArgs) {
+            $c = "$env:USERPROFILE\Videos\Savor\$name.mp4"
+            $a = @("-v","error","-y","-f","lavfi","-i","color=c=black:s=1920x1080:r=30,drawbox=x=960:y=0:w=960:h=1080:c=white:t=fill","-t","4") + $encArgs + @($c)
+            & $ff.FullName @a
+            $q = Start-Process publish/Savor.exe -ArgumentList "--edit", "`"$c`"" -PassThru
+            Start-Sleep 18
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $vals = foreach ($x in 60..640) { if ($x % 20 -eq 0) { $bmp.GetPixel($x, 350).R } }
+            Stop-Process -Id $q.Id -Force
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$($q.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep 2
+            $l = "$name -> row R values: $($vals -join ',')"
+            Write-Host "::notice::$l"; $l | Out-File diag.txt -Append
+          }
+          Probe-Clip "range-limited" @("-c:v","libx264","-pix_fmt","yuv420p","-color_range","tv","-colorspace","bt709","-color_primaries","bt709","-color_trc","bt709")
+          Probe-Clip "range-full" @("-c:v","libx264","-pix_fmt","yuvj420p","-color_range","pc","-colorspace","bt709","-color_primaries","bt709","-color_trc","bt709")
+
           gh release view ci-diagnostics *> $null
           if ($LASTEXITCODE -ne 0) { gh release create ci-diagnostics --prerelease --latest=false --title "CI diagnostics" --notes "Automated smoke-test output. Not a Savor release." }
           gh release upload ci-diagnostics screenshot.png editor.png diag.txt --clobber
