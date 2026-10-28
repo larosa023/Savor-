@@ -218,7 +218,7 @@ public partial class ClipEditor : UserControl
         if (!_opened && _duration <= TimeSpan.Zero) return;
         long now = Environment.TickCount64;
 
-        // seek at most ~25 times a second while scrubbing; always land on the final position
+        if (_drag != Drag.None) { ApplyDrag(now); UpdatePlayhead(force: false); return; }
         if (_pendingSeek is { } ps && now - _lastSeekTicks >= 40) FlushSeek(ps);
 
         if (_playing)
@@ -327,8 +327,12 @@ public partial class ClipEditor : UserControl
     static string Fmt(TimeSpan t) =>
         t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss\.f") : t.ToString(@"m\:ss\.f");
 
+    bool _trimTextDirty;
+
     void UpdateTrimText()
     {
+        if (_drag is Drag.In or Drag.Out) { _trimTextDirty = true; return; } // drawn from OnFrame at ~20 fps
+        _trimTextDirty = false;
         InText.Text = Fmt(_in);
         OutText.Text = Fmt(_out);
         LenText.Text = Fmt(_out - _in);
@@ -348,11 +352,12 @@ public partial class ClipEditor : UserControl
     void UpdateTimeline()
     {
         double xi = X(_in), xo = X(_out);
-        Canvas.SetLeft(SelBand, xi);
-        SelBand.Width = Math.Max(0, xo - xi);
+        // transforms only: moving the trim never triggers a layout pass
+        SelX.X = xi;
+        SelScale.ScaleX = Math.Max(0, xo - xi) / Math.Max(1, SelBand.Width);
         InX.X = xi - InHandle.Width;
         OutX.X = xo;
-        UpdatePlayhead(force: true);
+        UpdatePlayhead(force: _drag == Drag.None);
     }
 
     TimeSpan _shownPos = TimeSpan.MinValue;
@@ -371,7 +376,11 @@ public partial class ClipEditor : UserControl
         }
     }
 
-    void Timeline_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateTimeline();
+    void Timeline_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        SelBand.Width = Math.Max(1, TrackWidth);
+        UpdateTimeline();
+    }
 
     enum Drag { None, In, Out, Scrub }
     Drag _drag;
@@ -422,12 +431,59 @@ public partial class ClipEditor : UserControl
             Timeline.Cursor = HandleAt(x) != Drag.None ? Cursors.SizeWE : Cursors.Hand;
             return;
         }
-        switch (_drag)
+        // Gaming mice report up to 1000x/s; just remember the latest position and apply it once per frame.
+        _dragX = x;
+    }
+
+    double? _dragX;
+    double _lastAppliedX = double.NaN;
+    long _lastMoveTicks;
+
+    /// <summary>Applies the newest drag position (once per screen refresh).</summary>
+    void ApplyDrag(long now)
+    {
+        if (_drag == Drag.None) return;
+        if (_dragX is { } x)
         {
-            case Drag.In: SetIn(T(x - _grabOffset)); Seek(_in); break;
-            case Drag.Out: SetOut(T(x - _grabOffset)); Seek(_out); break;
-            case Drag.Scrub: Seek(T(x)); break;
+            _dragX = null;
+            if (x != _lastAppliedX)
+            {
+                _lastAppliedX = x;
+                _lastMoveTicks = now;
+                switch (_drag)
+                {
+                    case Drag.In: SetIn(T(x - _grabOffset)); MovePlayheadOnly(_in); break;
+                    case Drag.Out: SetOut(T(x - _grabOffset)); MovePlayheadOnly(_out); break;
+                    case Drag.Scrub: MovePlayheadOnly(T(x)); break;
+                }
+            }
         }
+
+        // Seeking the video is the expensive part: do it when the drag slows down, or at most ~8x/s while moving fast.
+        if (_pendingSeek is { } ps)
+        {
+            bool settled = now - _lastMoveTicks >= 60;
+            bool due = now - _lastSeekTicks >= (_drag == Drag.Scrub ? 90 : 130);
+            if (settled || due) FlushSeek(ps);
+        }
+
+        if (_trimTextDirty && now - _lastTextTicks > 50)
+        {
+            _trimTextDirty = false;
+            InText.Text = Fmt(_in);
+            OutText.Text = Fmt(_out);
+            LenText.Text = Fmt(_out - _in);
+        }
+    }
+
+    /// <summary>Moves the playhead without seeking the video yet.</summary>
+    void MovePlayheadOnly(TimeSpan t)
+    {
+        t = Clamp(t, TimeSpan.Zero, _duration);
+        _clockBase = t;
+        _pendingSeek = t;
+        BigPlay.Visibility = Visibility.Collapsed;
+        UpdatePlayhead(force: false);
     }
 
     void Timeline_MouseUp(object sender, MouseButtonEventArgs e) => Timeline.ReleaseMouseCapture();
@@ -435,10 +491,14 @@ public partial class ClipEditor : UserControl
     void Timeline_LostCapture(object sender, MouseEventArgs e)
     {
         if (_drag == Drag.None) return;
+        ApplyDrag(Environment.TickCount64);
         if (_pendingSeek is { } ps) FlushSeek(ps);
         InHandle.Opacity = OutHandle.Opacity = 1;
+        _lastAppliedX = double.NaN;
         bool resume = _drag == Drag.Scrub && _wasPlaying;
         _drag = Drag.None;
+        UpdateTrimText();
+        UpdatePlayhead(force: true);
         if (resume) Play();
     }
 

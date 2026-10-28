@@ -123,8 +123,15 @@
                 <Border CornerRadius="6" Background="{StaticResource Surface2Brush}" Height="28" VerticalAlignment="Center"
                         Margin="18,0"/>
                 <Canvas x:Name="TimelineCanvas" IsHitTestVisible="False" ClipToBounds="False">
-                    <Border x:Name="SelBand" Height="28" Canvas.Top="8" Width="0" Background="{StaticResource AccentSoftBrush}"
-                            BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,2"/>
+                    <Border x:Name="SelBand" Height="28" Canvas.Top="8" Width="100" Background="{StaticResource AccentSoftBrush}"
+                            BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,2" RenderTransformOrigin="0,0">
+                        <Border.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="SelScale"/>
+                                <TranslateTransform x:Name="SelX"/>
+                            </TransformGroup>
+                        </Border.RenderTransform>
+                    </Border>
                     <Border x:Name="InHandle" Width="18" Height="38" Canvas.Top="3" CornerRadius="6,0,0,6"
                             Background="{StaticResource AccentBrush}">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
