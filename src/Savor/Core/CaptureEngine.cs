@@ -45,6 +45,9 @@ public sealed class CaptureEngine : IDisposable
     public DateTime StartedUtc { get; private set; }
     public bool IsRunning => _proc is { HasExited: false };
     public AudioMixer? Mixer => _mixer;
+    string[] _trackNames = Array.Empty<string>();
+    /// <summary>Audio tracks in the current capture, in file order.</summary>
+    public IReadOnlyList<string> TrackNames => _trackNames;
 
     public TimeSpan CpuTime
     {
@@ -216,6 +219,7 @@ public sealed class CaptureEngine : IDisposable
             {
                 _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume)
                 {
+                    SeparateTracks = s.SeparateAudioTracks,
                     DesktopMuted = s.DesktopMuted,
                     MicMuted = s.MicMuted,
                 };
@@ -234,6 +238,7 @@ public sealed class CaptureEngine : IDisposable
         }
 
         // ---- ffmpeg ----
+        _trackNames = audio && _mixer != null ? _mixer.TrackNames.ToArray() : Array.Empty<string>();
         var args = BuildArgs(s, enc, audio, rate);
         var p = new Process { StartInfo = Ffmpeg.StartInfo(args, redirectInput: true), EnableRaisingEvents = true };
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) AddLog(e.Data!); };
@@ -287,18 +292,28 @@ public sealed class CaptureEngine : IDisposable
 
         if (audio)
         {
-            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", "2",
+            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", (_trackNames.Length * 2).ToString(),
                                "-i", "pipe:0" });
         }
 
+        int tracks = audio ? Math.Max(1, _trackNames.Length) : 0;
+        if (tracks > 1)
+        {
+            // split the interleaved 6-channel input into one stereo stream per track
+            var fc = new System.Text.StringBuilder($"[1:a]asplit={tracks}");
+            for (int t = 0; t < tracks; t++) fc.Append($"[s{t}]");
+            for (int t = 0; t < tracks; t++) fc.Append($";[s{t}]pan=stereo|c0=c{t * 2}|c1=c{t * 2 + 1}[a{t}]");
+            a.AddRange(new[] { "-filter_complex", fc.ToString() });
+        }
         a.AddRange(new[] { "-map", "0:v" });
-        if (audio) a.AddRange(new[] { "-map", "1:a" });
+        if (tracks == 1) a.AddRange(new[] { "-map", "1:a" });
+        for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
 
         var vf = Ffmpeg.VideoFilter(enc);
         if (vf != null) a.AddRange(new[] { "-vf", vf });
         a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
 
-        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest" });
+        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", tracks > 1 ? "160k" : "192k", "-ar", "48000", "-shortest" });
 
         a.AddRange(new[]
         {
@@ -521,6 +536,12 @@ public sealed class CaptureEngine : IDisposable
                 "-f", "concat", "-safe", "0", "-i", listFile,
                 "-map", "0", "-c", "copy"
             };
+            for (int t = 0; t < _trackNames.Length; t++)
+            {
+                args.AddRange(new[] { $"-metadata:s:a:{t}", $"title={_trackNames[t]}" });
+                args.AddRange(new[] { $"-metadata:s:a:{t}", $"handler_name={_trackNames[t]}" });
+                args.AddRange(new[] { $"-disposition:a:{t}", t == 0 ? "default" : "0" });
+            }
             if (s.Container == "mp4")
             {
                 args.AddRange(new[] { "-movflags", "+faststart" });

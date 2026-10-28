@@ -292,7 +292,12 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <TextBlock Text="Desktop audio" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Desktop audio" FontWeight="SemiBold"/>
+                                        <Border x:Name="DeskTrackChip" Style="{StaticResource Chip}" Margin="8,0,0,0" Padding="6,1" Visibility="Collapsed">
+                                            <TextBlock x:Name="DeskTrackChipText" FontSize="10" FontWeight="Bold" Foreground="{StaticResource MutedBrush}"/>
+                                        </Border>
+                                    </StackPanel>
                                     <TextBlock x:Name="DeskDevice" Foreground="{StaticResource FaintBrush}" FontSize="11"
                                                TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                                 </StackPanel>
@@ -326,7 +331,12 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <TextBlock Text="Microphone" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Microphone" FontWeight="SemiBold"/>
+                                        <Border x:Name="MicTrackChip" Style="{StaticResource Chip}" Margin="8,0,0,0" Padding="6,1" Visibility="Collapsed">
+                                            <TextBlock x:Name="MicTrackChipText" FontSize="10" FontWeight="Bold" Foreground="{StaticResource MutedBrush}"/>
+                                        </Border>
+                                    </StackPanel>
                                     <TextBlock x:Name="MicDevice" Foreground="{StaticResource FaintBrush}" FontSize="11"
                                                TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                                 </StackPanel>
@@ -642,6 +652,15 @@
                                                    VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <TextBlock Text="Microphone volume" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="SeparateTracksToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Separate audio tracks" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Style="{StaticResource RowDesc}"
+                                                   Text="Track 1 is everything mixed (what players and Discord play). Track 2 is desktop audio only, track 3 is your mic only, so you can fix levels or cut your voice when editing."/>
+                                    </StackPanel>
                                 </DockPanel>
                             </StackPanel>
                         </Border>

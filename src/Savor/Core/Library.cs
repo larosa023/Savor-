@@ -116,6 +116,7 @@ public static class Library
                 var bytes = await File.ReadAllBytesAsync(jpg);
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
+                bmp.DecodePixelWidth = 360; // card size; keeps each thumbnail ~0.3 MB in memory
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
                 bmp.StreamSource = new MemoryStream(bytes);
                 bmp.EndInit();

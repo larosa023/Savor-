@@ -35,7 +35,7 @@ public sealed class PreviewSource : IDisposable
     /// <summary>Picks an even-sized output that fits the on-screen box and keeps the display's aspect.</summary>
     public static (int w, int h) FitSize(DisplayInfo d, double boxW, double boxH)
     {
-        double maxW = Math.Clamp(boxW, 320, 1600), maxH = Math.Clamp(boxH, 180, 900);
+        double maxW = Math.Clamp(boxW, 320, 1280), maxH = Math.Clamp(boxH, 180, 720);
         double scale = Math.Min(1.0, Math.Min(maxW / d.Width, maxH / d.Height));
         int w = Math.Max(2, (int)(d.Width * scale) / 2 * 2);
         int h = Math.Max(2, (int)(d.Height * scale) / 2 * 2);
@@ -159,6 +159,12 @@ public sealed class PreviewSource : IDisposable
         }
         _reader?.Join(500);
         _reader = null;
+        lock (_lock)
+        {
+            // release the frame buffers (~11 MB at 720p) while the preview is off
+            _spare = _ready = _shown = Array.Empty<byte>();
+            _fresh = false;
+        }
     }
 
     public void Dispose() => Stop();

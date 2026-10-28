@@ -72,8 +72,10 @@ public partial class MainWindow : Window
         _uiTimer.Tick += (_, _) => Tick();
 
         SourceInitialized += (_, _) => OnSourceInitialized();
+        IsVisibleChanged += (_, _) => { if (!IsVisible) ScheduleTrim(); };
         StateChanged += (_, _) =>
         {
+            if (WindowState == WindowState.Minimized) ScheduleTrim();
             Root.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
             MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
         };
@@ -572,7 +574,15 @@ public partial class MainWindow : Window
         MicMuteIcon.Foreground = (Brush)FindResource(_settings.MicMuted ? "RecBrush" : "TextBrush");
         DeskVol.IsEnabled = _settings.DesktopAudio;
         MicVol.IsEnabled = !string.IsNullOrEmpty(_settings.MicDeviceId);
-        MixerNote.Text = _engine.IsRunning ? "" : "Monitoring — not capturing";
+        bool both = _settings.DesktopAudio && !string.IsNullOrEmpty(_settings.MicDeviceId);
+        var live = _engine.IsRunning ? _engine.TrackNames : null;
+        bool split = live != null ? live.Count > 1 : both && _settings.SeparateAudioTracks;
+        DeskTrackChip.Visibility = MicTrackChip.Visibility = split ? Visibility.Visible : Visibility.Collapsed;
+        DeskTrackChipText.Text = "TRACK 2";
+        MicTrackChipText.Text = "TRACK 3";
+        int count = live?.Count ?? (split ? 3 : (_settings.DesktopAudio || !string.IsNullOrEmpty(_settings.MicDeviceId) ? 1 : 0));
+        string tracks = count switch { 0 => "No audio", 1 => "1 audio track", _ => $"{count} tracks · 1 = mix" };
+        MixerNote.Text = _engine.IsRunning ? tracks : $"{tracks}  ·  monitoring, not capturing";
     }
 
     static string VolumeDb(double v) => v <= 0.0001 ? "-∞ dB" : $"{20 * Math.Log10(v):+0.0;-0.0;0.0} dB";
@@ -668,6 +678,11 @@ public partial class MainWindow : Window
 
     void ReloadClips()
     {
+        if (_clipsNeedThumbs)
+        {
+            _clipsNeedThumbs = false;
+            _clips.Clear(); // forces fresh items whose thumbnails load from the disk cache
+        }
         var items = Library.Scan(_settings.OutputFolder);
         var known = _clips.ToDictionary(c => c.FilePath + c.Size, c => c);
         _clips.Clear();
@@ -914,6 +929,7 @@ public partial class MainWindow : Window
             AutoBufferToggle.IsChecked = _settings.StartBufferOnLaunch;
 
             DesktopAudioToggle.IsChecked = _settings.DesktopAudio;
+            SeparateTracksToggle.IsChecked = _settings.SeparateAudioTracks;
             DesktopVolumeSlider.Value = _settings.DesktopVolume * 100;
             DesktopVolumeValue.Text = $"{_settings.DesktopVolume * 100:0}%";
             MicCombo.Items.Clear();
@@ -983,6 +999,7 @@ public partial class MainWindow : Window
         _settings.EncoderId = SelectedTag<string>(EncoderCombo) ?? "auto";
         _settings.CaptureCursor = CursorToggle.IsChecked == true;
         _settings.DesktopAudio = DesktopAudioToggle.IsChecked == true;
+        _settings.SeparateAudioTracks = SeparateTracksToggle.IsChecked == true;
         var mic = SelectedTag<string>(MicCombo);
         _settings.MicDeviceId = string.IsNullOrEmpty(mic) ? null : mic;
         _settings.Save();
@@ -1218,6 +1235,42 @@ public partial class MainWindow : Window
             ShowError("Update failed: " + ex.Message);
         }
     }
+
+    // ===================== memory =====================
+
+    DispatcherTimer? _trimTimer;
+
+    /// <summary>
+    /// When Savor goes to the tray or is minimized (i.e. while you're gaming), drop UI caches and hand
+    /// unused memory back to Windows. Repeats every few minutes while hidden.
+    /// </summary>
+    void ScheduleTrim()
+    {
+        _trimTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => TrimNow(), Dispatcher);
+        _trimTimer.Interval = TimeSpan.FromSeconds(2);
+        _trimTimer.Start();
+    }
+
+    void TrimNow()
+    {
+        bool hidden = !IsVisible || WindowState == WindowState.Minimized;
+        if (!hidden) { _trimTimer?.Stop(); return; }
+        _trimTimer!.Interval = TimeSpan.FromMinutes(3);
+
+        _previewBitmap = null;
+        PreviewBrush.ImageSource = null;
+        foreach (var c in _clips) c.Thumbnail = null; // reloaded when the Captures tab is opened
+        _clipsNeedThumbs = true;
+
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        try { SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, (IntPtr)(-1), (IntPtr)(-1)); } catch { }
+    }
+
+    bool _clipsNeedThumbs;
+
+    [DllImport("kernel32.dll")]
+    static extern bool SetProcessWorkingSetSize(IntPtr process, IntPtr min, IntPtr max);
 
     [DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);

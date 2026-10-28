@@ -116,6 +116,8 @@ public sealed class AppSettings
     public bool MicMuted { get; set; }
 
     public bool ShowPreview { get; set; } = true;
+    /// <summary>Write Mix + Desktop + Mic as separate audio tracks (when both sources are on).</summary>
+    public bool SeparateAudioTracks { get; set; } = true;
 
     public string Container { get; set; } = "mp4";
 

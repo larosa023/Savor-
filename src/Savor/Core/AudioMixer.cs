@@ -33,7 +33,20 @@ public sealed class AudioMixer : IDisposable
     float[] _desk = Array.Empty<float>();
     float[] _micBuf = Array.Empty<float>();
     float[] _scratch = Array.Empty<float>();
+    float[] _out = Array.Empty<float>();
     byte[] _outBytes = Array.Empty<byte>();
+
+    /// <summary>
+    /// When true and both sources are on, output is 3 stereo tracks interleaved as 6 channels:
+    /// [mix L, mix R, desktop L, desktop R, mic L, mic R]. Otherwise a single stereo mix.
+    /// Fixed for the life of the mixer (ffmpeg's input layout depends on it).
+    /// </summary>
+    public bool SeparateTracks { get; init; }
+    public int OutputChannels => TrackNames.Count * 2;
+    public IReadOnlyList<string> TrackNames =>
+        SeparateTracks && DesktopEnabled && _mic != null
+            ? new[] { "Mix", "Desktop audio", "Microphone" }
+            : new[] { "Mix" };
 
     public int SampleRate { get; }
     public bool DesktopEnabled { get; set; }
@@ -145,6 +158,9 @@ public sealed class AudioMixer : IDisposable
         float dv = DesktopEnabled && !DesktopMuted ? DesktopVolume : 0f;
         float mv = MicMuted ? 0f : MicVolume;
         float dPeak = 0, mPeak = 0;
+        int ch = OutputChannels;
+        int outN = frames * ch;
+        if (_out.Length < outN) _out = new float[outN];
         for (int i = 0; i < n; i++)
         {
             float d = _desk[i] * dv;
@@ -152,19 +168,26 @@ public sealed class AudioMixer : IDisposable
             float ad = Math.Abs(d), am = Math.Abs(m);
             if (ad > dPeak) dPeak = ad;
             if (am > mPeak) mPeak = am;
-            float s = d + m;
-            _desk[i] = s > 1f ? 1f : (s < -1f ? -1f : s);
+            int frame = i >> 1, side = i & 1, o = frame * ch + side;
+            _out[o] = Clip(d + m);
+            if (ch == 6)
+            {
+                _out[o + 2] = Clip(d);
+                _out[o + 4] = Clip(m);
+            }
         }
         DesktopLevel = Math.Min(1f, dPeak);
         MicLevel = Math.Min(1f, mPeak);
         if (DesktopLevel > _deskMax) _deskMax = DesktopLevel;
         if (MicLevel > _micMax) _micMax = MicLevel;
 
-        int bytes = n * 4;
+        int bytes = outN * 4;
         if (_outBytes.Length < bytes) _outBytes = new byte[bytes];
-        Buffer.BlockCopy(_desk, 0, _outBytes, 0, bytes);
+        Buffer.BlockCopy(_out, 0, _outBytes, 0, bytes);
         DataAvailable?.Invoke(_outBytes, bytes);
     }
+
+    static float Clip(float s) => s > 1f ? 1f : (s < -1f ? -1f : s);
 
     static bool IsFloat(WaveFormat f) =>
         f.Encoding == WaveFormatEncoding.IeeeFloat ||

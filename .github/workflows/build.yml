@@ -45,7 +45,7 @@ jobs:
         run: >
           dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true -p:DebugType=none -o publish
+          -p:EnableCompressionInSingleFile=false -p:DebugType=none -o publish
 
       - name: Read version
         shell: pwsh
@@ -84,6 +84,20 @@ jobs:
           $g = [System.Drawing.Graphics]::FromImage($bmp)
           $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $bmp.Save("screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Stop-Process -Id $p.Id -Force
+          $kids | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Start-Sleep 3
+
+          # second run: started in the tray (how it sits while gaming), replay buffer on
+          $p = Start-Process publish/Savor.exe -ArgumentList "--minimized" -PassThru
+          Start-Sleep 30
+          $p.Refresh()
+          $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
+          $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"
+          $kidTxt = ($kids | ForEach-Object { "$($_.Name) $(Mb $_.WorkingSetSize)MB" }) -join ", "
+          $line2 = "In tray: private working set $(Mb $pws) MB, private bytes $(Mb $p.PrivateMemorySize64) MB | children: $kidTxt"
+          Write-Host "::notice::$line2"
+          $line2 | Out-File diag.txt -Append
           Stop-Process -Id $p.Id -Force
           $kids | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           gh release view ci-diagnostics *> $null
