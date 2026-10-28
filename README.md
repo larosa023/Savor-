@@ -54,7 +54,7 @@ dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained tru
 ```
 
 Put an `ffmpeg.exe` (a recent build with `ddagrab`, e.g. from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)) next to the built `Savor.exe`.
-Every push to `main` is built by GitHub Actions; pushing a `v*` tag publishes a release.
+Every push to `main` is built by GitHub Actions and published as the release for the version in `Savor.csproj` (bump `<Version>` for a new release).
 
 ## Notes
 
