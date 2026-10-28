@@ -103,42 +103,79 @@ public sealed class Filmstrip : IDisposable
         }
     }
 
-    /// <summary>The preview frame nearest to <paramref name="t"/>, or null if it isn't ready yet.</summary>
-    public BitmapSource? FrameAt(TimeSpan t)
+    // ---- background decoding: the UI thread never decodes a JPEG ----
+    readonly AutoResetEvent _wake = new(false);
+    Thread? _decoder;
+    volatile int _wanted = -1;
+
+    /// <summary>Raised on a background thread when a requested frame is decoded.</summary>
+    public event Action<int, BitmapSource>? FrameReady;
+
+    /// <summary>Index of the frame nearest to <paramref name="t"/>, or -1 if it isn't generated yet.</summary>
+    public int IndexAt(TimeSpan t)
     {
-        int idx = (int)Math.Round(t.TotalSeconds * Fps);
-        byte[]? jpg;
+        int idx = Math.Max(0, (int)Math.Round(t.TotalSeconds * Fps));
         lock (_lock)
         {
-            if (_frames.Count == 0) return null;
+            if (_frames.Count == 0) return -1;
             if (idx >= _frames.Count)
             {
-                // not generated yet: only fall back to the last frame if it's close
-                if (idx - (_frames.Count - 1) > 2) return null;
+                if (idx - (_frames.Count - 1) > 2) return -1; // far beyond what's ready
                 idx = _frames.Count - 1;
             }
-            if (idx < 0) idx = 0;
-            if (idx == _lastIndex) return _lastFrame;
-            jpg = _frames[idx];
         }
-        try
+        return idx;
+    }
+
+    /// <summary>The decoded frame if <paramref name="idx"/> is the one most recently decoded.</summary>
+    public BitmapSource? Cached(int idx) => idx == _lastIndex ? _lastFrame : null;
+
+    /// <summary>Asks for a frame; only the newest request is decoded (older ones are skipped).</summary>
+    public void Request(int idx)
+    {
+        _wanted = idx;
+        if (_decoder == null)
         {
-            var img = new BitmapImage();
-            img.BeginInit();
-            img.CacheOption = BitmapCacheOption.OnLoad;
-            img.StreamSource = new MemoryStream(jpg);
-            img.EndInit();
-            img.Freeze();
-            _lastIndex = idx;
-            _lastFrame = img;
-            return img;
+            _decoder = new Thread(DecodeLoop) { IsBackground = true, Name = "Savor filmstrip decode", Priority = ThreadPriority.AboveNormal };
+            _decoder.Start();
         }
-        catch { return null; }
+        _wake.Set();
+    }
+
+    void DecodeLoop()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            _wake.WaitOne(500);
+            int idx = _wanted;
+            if (idx < 0 || idx == _lastIndex) continue;
+            byte[] jpg;
+            lock (_lock)
+            {
+                if (idx >= _frames.Count) continue;
+                jpg = _frames[idx];
+            }
+            try
+            {
+                var img = new BitmapImage();
+                img.BeginInit();
+                img.CacheOption = BitmapCacheOption.OnLoad;
+                img.StreamSource = new MemoryStream(jpg);
+                img.EndInit();
+                img.Freeze(); // frozen bitmaps can be handed to the UI thread
+                _lastIndex = idx;
+                _lastFrame = img;
+                FrameReady?.Invoke(idx, img);
+            }
+            catch { }
+        }
     }
 
     public void Dispose()
     {
         _cts.Cancel();
+        _wake.Set();
+        FrameReady = null;
         try { if (_proc is { HasExited: false } p) p.Kill(true); } catch { }
         try { _proc?.Dispose(); } catch { }
         lock (_lock) _frames.Clear();

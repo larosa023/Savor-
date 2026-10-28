@@ -190,6 +190,22 @@ public partial class ClipEditor : UserControl
     {
         _strip?.Dispose();
         _strip = _path != null ? Filmstrip.Start(_path, _duration) : null;
+        if (_strip != null) _strip.FrameReady += OnStripFrame;
+    }
+
+    int _wantedStripIndex = -1;
+
+    void OnStripFrame(int idx, System.Windows.Media.Imaging.BitmapSource img) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            // still dragging and still moving: show it (a newer request may already be on its way)
+            if (_drag != Drag.None && Environment.TickCount64 - _lastMoveTicks < 120) ShowStripFrame(img);
+        }, DispatcherPriority.Render);
+
+    void ShowStripFrame(System.Windows.Media.Imaging.BitmapSource img)
+    {
+        if (!ReferenceEquals(ScrubFrame.Source, img)) ScrubFrame.Source = img;
+        ScrubFrame.Visibility = Visibility.Visible;
     }
 
     /// <summary>Where playback is right now (smooth, not limited to the player's update rate).</summary>
@@ -496,15 +512,16 @@ public partial class ClipEditor : UserControl
 
         if (_pendingSeek is { } ps)
         {
-            var frame = _strip?.FrameAt(ps);
-            if (frame != null)
+            int idx = _strip?.IndexAt(ps) ?? -1;
+            if (idx >= 0)
             {
+                _strip!.Request(idx); // decoded in the background, shown by OnStripFrame
                 // instant: a pre-made preview frame, no video seek at all
                 if (now - _lastMoveTicks < 120)
                 {
                     _hideScrub?.Stop();
-                    if (!ReferenceEquals(ScrubFrame.Source, frame)) ScrubFrame.Source = frame;
-                    ScrubFrame.Visibility = Visibility.Visible;
+                    _wantedStripIndex = idx;
+                    if (_strip.Cached(idx) is { } cached) ShowStripFrame(cached);
                 }
                 else
                 {
