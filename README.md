@@ -13,7 +13,9 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 - **Recording** — classic start/stop recording with **Alt + F9**. It shares the encoder with the replay buffer, so running both costs nothing extra.
 - **GPU encoding** — NVIDIA NVENC (H.264 / HEVC / AV1), AMD AMF and Intel Quick Sync, detected automatically. Falls back to x264 on the CPU.
 - **Low-overhead capture** — Windows Desktop Duplication straight into the hardware encoder, no frame copies on supported GPUs.
-- **Audio** — desktop audio plus an optional microphone, mixed into one track with live level meters and per-source volume.
+- **Audio** — desktop audio plus an optional microphone, with live level meters, volume and mute per source.
+- **Multiple audio tracks** — track 1 is the full mix (what players and Discord play), track 2 is desktop audio only, track 3 is your mic only. Turn it off in Settings → Audio for a single track.
+- **Lightweight** — about 50 MB of memory with the window open and about 25 MB in the tray (plus the FFmpeg capture process).
 - **Global hotkeys** that work while you're in a game, and a tray icon so Savor stays out of the way.
 - **Recent captures** gallery with thumbnails — click to play, right-click to copy the file (paste straight into Discord), show in folder, or delete.
 - Quiet notifications that never steal focus from your game.
