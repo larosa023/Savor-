@@ -120,6 +120,16 @@ jobs:
           $g = [System.Drawing.Graphics]::FromImage($bmp)
           $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $bmp.Save("editor.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          # close the editor with Esc and check the memory comes back
+          Add-Type -AssemblyName Microsoft.VisualBasic
+          try { [Microsoft.VisualBasic.Interaction]::AppActivate($p.Id) } catch { }
+          Start-Sleep 1
+          [System.Windows.Forms.SendKeys]::SendWait("{ESC}")
+          Start-Sleep 12
+          $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
+          $line4 = "Editor closed: private working set $(Mb $pws) MB"
+          Write-Host "::notice::$line4"
+          $line4 | Out-File diag.txt -Append
           Stop-Process -Id $p.Id -Force
           Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 

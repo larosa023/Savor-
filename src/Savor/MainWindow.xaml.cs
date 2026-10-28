@@ -94,6 +94,12 @@ public partial class MainWindow : Window
 
     void OnSourceInitialized()
     {
+        // never open bigger than the screen's work area
+        var wa = SystemParameters.WorkArea;
+        if (Height > wa.Height) { Height = wa.Height; Top = wa.Top; }
+        if (Width > wa.Width) { Width = wa.Width; Left = wa.Left; }
+        MinHeight = Math.Min(MinHeight, wa.Height);
+        MinWidth = Math.Min(MinWidth, wa.Width);
         var hwnd = new WindowInteropHelper(this).Handle;
         int dark = 1, round = 2;
         DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int));   // immersive dark mode
