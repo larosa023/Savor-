@@ -983,7 +983,7 @@ public partial class MainWindow : Window
                 result = $"app audio: capture started for explorer.exe (pid {pid}), alive={cap.IsAlive}, packets={packets}";
             }
         }
-        catch (Exception ex) { result = "app audio: FAILED " + ex.GetType().Name + ": " + ex.Message; }
+        catch (Exception ex) { result = "app audio: FAILED " + ex.ToString().Replace("\r", "").Replace("\n", " | "); }
         try
         {
             Directory.CreateDirectory(AppSettings.LocalDataDir);
