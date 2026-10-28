@@ -23,8 +23,10 @@ public partial class ClipEditor : UserControl
     readonly Stopwatch _clock = new();
     TimeSpan _clockBase;
     TimeSpan? _pendingSeek;
-    long _lastSeekTicks, _lastSyncTicks, _lastTextTicks;
+    long _lastSeekTicks, _lastSyncTicks, _lastTextTicks, _lastTrimTextTicks;
     bool _renderHooked;
+    Filmstrip? _strip;
+    DispatcherTimer? _hideScrub;
     string? _path;
     Func<EncoderDef?>? _encoder;
     AppSettings? _settings;
@@ -95,6 +97,10 @@ public partial class ClipEditor : UserControl
         if (_renderHooked) { CompositionTarget.Rendering -= OnFrame; _renderHooked = false; }
         _clock.Reset();
         _pendingSeek = null;
+        _strip?.Dispose();
+        _strip = null;
+        ScrubFrame.Source = null;
+        ScrubFrame.Visibility = Visibility.Collapsed;
         try { Player.Stop(); } catch { }
         try { Player.Close(); } catch { }
         Player.Source = null;
@@ -124,6 +130,7 @@ public partial class ClipEditor : UserControl
         if (!meta.Contains('×')) MetaText.Text = $"{_vw}×{_vh}  ·  {Fmt(_duration)}  ·  {meta}";
         _clockBase = TimeSpan.Zero;
         FlushSeek(TimeSpan.Zero);
+        StartFilmstrip();
         UpdateTimeline();
         UpdateTrimText();
         LayoutCrop();
@@ -154,11 +161,18 @@ public partial class ClipEditor : UserControl
             _out = _duration;
         }
         if (v.Success) { _vw = int.Parse(v.Groups[1].Value); _vh = int.Parse(v.Groups[2].Value); }
+        StartFilmstrip();
         UpdateTimeline();
         UpdateTrimText();
     }
 
     void Player_MediaEnded(object sender, RoutedEventArgs e) => Pause();
+
+    void StartFilmstrip()
+    {
+        _strip?.Dispose();
+        _strip = _path != null ? Filmstrip.Start(_path, _duration) : null;
+    }
 
     /// <summary>Where playback is right now (smooth, not limited to the player's update rate).</summary>
     TimeSpan Now => _clock.IsRunning ? _clockBase + _clock.Elapsed : _clockBase;
@@ -171,6 +185,8 @@ public partial class ClipEditor : UserControl
         FlushSeek(pos);
         Player.Play();
         _playing = true;
+        _hideScrub?.Stop();
+        ScrubFrame.Visibility = Visibility.Collapsed;
         _clockBase = pos;
         _clock.Restart();
         BigPlay.Visibility = Visibility.Collapsed;
@@ -431,49 +447,75 @@ public partial class ClipEditor : UserControl
             Timeline.Cursor = HandleAt(x) != Drag.None ? Cursors.SizeWE : Cursors.Hand;
             return;
         }
-        // Gaming mice report up to 1000x/s; just remember the latest position and apply it once per frame.
+        // Everything here is transform-only and cheap; the video itself is only touched once per frame (OnFrame).
         _dragX = x;
+        ApplyDragPosition();
+    }
+
+    void ApplyDragPosition()
+    {
+        if (_dragX is not { } x || x == _lastAppliedX) return;
+        _dragX = null;
+        _lastAppliedX = x;
+        _lastMoveTicks = Environment.TickCount64;
+        switch (_drag)
+        {
+            case Drag.In: SetIn(T(x - _grabOffset)); MovePlayheadOnly(_in); break;
+            case Drag.Out: SetOut(T(x - _grabOffset)); MovePlayheadOnly(_out); break;
+            case Drag.Scrub: MovePlayheadOnly(T(x)); break;
+        }
     }
 
     double? _dragX;
     double _lastAppliedX = double.NaN;
     long _lastMoveTicks;
 
-    /// <summary>Applies the newest drag position (once per screen refresh).</summary>
+    /// <summary>Once per screen refresh while dragging: show the matching preview frame.</summary>
     void ApplyDrag(long now)
     {
         if (_drag == Drag.None) return;
-        if (_dragX is { } x)
+        ApplyDragPosition();
+
+        if (_pendingSeek is { } ps)
         {
-            _dragX = null;
-            if (x != _lastAppliedX)
+            var frame = _strip?.FrameAt(ps);
+            if (frame != null)
             {
-                _lastAppliedX = x;
-                _lastMoveTicks = now;
-                switch (_drag)
-                {
-                    case Drag.In: SetIn(T(x - _grabOffset)); MovePlayheadOnly(_in); break;
-                    case Drag.Out: SetOut(T(x - _grabOffset)); MovePlayheadOnly(_out); break;
-                    case Drag.Scrub: MovePlayheadOnly(T(x)); break;
-                }
+                // instant: a small pre-made frame, no video seek at all
+                _hideScrub?.Stop();
+                if (!ReferenceEquals(ScrubFrame.Source, frame)) ScrubFrame.Source = frame;
+                ScrubFrame.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                // preview frames not ready yet: fall back to occasional real seeks
+                bool settled = now - _lastMoveTicks >= 60;
+                bool due = now - _lastSeekTicks >= 150;
+                if (settled || due) FlushSeek(ps);
             }
         }
 
-        // Seeking the video is the expensive part: do it when the drag slows down, or at most ~8x/s while moving fast.
-        if (_pendingSeek is { } ps)
+        if (_trimTextDirty && now - _lastTrimTextTicks > 50)
         {
-            bool settled = now - _lastMoveTicks >= 60;
-            bool due = now - _lastSeekTicks >= (_drag == Drag.Scrub ? 90 : 130);
-            if (settled || due) FlushSeek(ps);
-        }
-
-        if (_trimTextDirty && now - _lastTextTicks > 50)
-        {
+            _lastTrimTextTicks = now;
             _trimTextDirty = false;
             InText.Text = Fmt(_in);
             OutText.Text = Fmt(_out);
             LenText.Text = Fmt(_out - _in);
         }
+    }
+
+    /// <summary>After a drag: one exact seek, then fade out the preview frame once the video has caught up.</summary>
+    void EndScrubPreview()
+    {
+        if (ScrubFrame.Visibility != Visibility.Visible) return;
+        _hideScrub ??= new DispatcherTimer(TimeSpan.FromMilliseconds(180), DispatcherPriority.Background, (_, _) =>
+        {
+            _hideScrub!.Stop();
+            if (_drag == Drag.None) { ScrubFrame.Visibility = Visibility.Collapsed; ScrubFrame.Source = null; }
+        }, Dispatcher);
+        _hideScrub.Stop();
+        _hideScrub.Start();
     }
 
     /// <summary>Moves the playhead without seeking the video yet.</summary>
@@ -491,8 +533,9 @@ public partial class ClipEditor : UserControl
     void Timeline_LostCapture(object sender, MouseEventArgs e)
     {
         if (_drag == Drag.None) return;
-        ApplyDrag(Environment.TickCount64);
+        ApplyDragPosition();
         if (_pendingSeek is { } ps) FlushSeek(ps);
+        EndScrubPreview();
         InHandle.Opacity = OutHandle.Opacity = 1;
         _lastAppliedX = double.NaN;
         bool resume = _drag == Drag.Scrub && _wasPlaying;
@@ -500,6 +543,35 @@ public partial class ClipEditor : UserControl
         UpdateTrimText();
         UpdatePlayhead(force: true);
         if (resume) Play();
+    }
+
+    /// <summary>CI only: simulates a fast drag of the start handle and reports per-frame cost.</summary>
+    public async Task<string> SelfTestScrubAsync()
+    {
+        for (int i = 0; i < 40 && (_strip == null || _strip.Count < 20); i++) await Task.Delay(250);
+        int frames = _strip?.Count ?? 0;
+        var sw = new Stopwatch();
+        double worst = 0, total = 0;
+        int shown = 0;
+        _drag = Drag.In;
+        _grabOffset = 0;
+        double w = TrackWidth;
+        for (int i = 0; i <= 120; i++)
+        {
+            // sweep right and back like a fast hand movement
+            double f = i <= 60 ? i / 60.0 : (120 - i) / 60.0;
+            sw.Restart();
+            _dragX = Pad + f * w * 0.8;
+            ApplyDrag(Environment.TickCount64);
+            sw.Stop();
+            double ms = sw.Elapsed.TotalMilliseconds;
+            worst = Math.Max(worst, ms);
+            total += ms;
+            if (ScrubFrame.Visibility == Visibility.Visible) shown++;
+            await Task.Delay(8); // ~120 Hz of input
+        }
+        Timeline_LostCapture(this, null!);
+        return $"filmstrip frames={frames}, drag steps=121, preview frame shown on {shown}, avg {total / 121:0.00} ms, worst {worst:0.00} ms per step";
     }
 
     // ===================== crop =====================

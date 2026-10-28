@@ -757,6 +757,12 @@ public partial class MainWindow : Window
             }
             catch (Exception ex) { LogError("Dropdown self-test", ex); }
         }
+        try
+        {
+            var result = await _editor.SelfTestScrubAsync();
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), result + "\n");
+        }
+        catch (Exception ex) { LogError("Scrub self-test", ex); }
     }
 
     static IEnumerable<T> FindAll<T>(DependencyObject root) where T : DependencyObject

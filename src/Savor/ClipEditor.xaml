@@ -82,6 +82,10 @@
                               Stretch="Uniform" MediaOpened="Player_MediaOpened" MediaFailed="Player_MediaFailed"
                               MediaEnded="Player_MediaEnded" IsHitTestVisible="False"/>
 
+                <!-- shown instead of seeking the video while dragging the timeline -->
+                <Image x:Name="ScrubFrame" Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"
+                       RenderOptions.BitmapScalingMode="Linear"/>
+
                 <!-- crop overlay -->
                 <Canvas x:Name="CropLayer" Visibility="Collapsed" Background="Transparent"
                         MouseLeftButtonDown="Crop_MouseDown" MouseMove="Crop_MouseMove" MouseLeftButtonUp="Crop_MouseUp">

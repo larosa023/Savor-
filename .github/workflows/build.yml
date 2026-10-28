@@ -109,13 +109,15 @@ jobs:
           & $ff.FullName -v error -y -f lavfi -i testsrc2=size=1920x1080:rate=60 -f lavfi -i sine=440 -t 12 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac $clip
           $env:SAVOR_SELFTEST = "1"
           $p = Start-Process publish/Savor.exe -ArgumentList "--edit", "`"$clip`"" -PassThru
-          Start-Sleep 25
+          Start-Sleep 35
           $p.Refresh()
           $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
           $line3 = "Editor open: private working set $(Mb $pws) MB, private bytes $(Mb $p.PrivateMemorySize64) MB"
           Write-Host "::notice::$line3"
           $line3 | Out-File diag.txt -Append
           "clip exists: $(Test-Path $clip)" | Out-File diag.txt -Append
+          $st = "$env:LOCALAPPDATA\Savor\selftest.log"
+          if (Test-Path $st) { $t = Get-Content $st -Raw; Write-Host "::notice::Self-test: $t"; $t | Out-File diag.txt -Append }
           $log = "$env:LOCALAPPDATA\Savor\errors.log"
           if (Test-Path $log) { Get-Content $log | Out-File diag.txt -Append; Write-Host "::warning::errors.log present" }
           $g = [System.Drawing.Graphics]::FromImage($bmp)
