@@ -119,6 +119,7 @@ public partial class MainWindow : Window
         _tray.OpenFolderRequested += OpenOutputFolder;
         _tray.ExitRequested += () => _ = ExitAsync();
 
+        System.Threading.Tasks.Task.Run(ClipAudio.CleanTemp);
         _hotkeys = new HotkeyManager(this);
         RegisterHotkeys();
 
@@ -1007,6 +1008,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex) { LogError("Dropdown self-test", ex); }
         }
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), _editor.AudioDiag() + "\n"); } catch { }
         try
         {
             var result = await _editor.SelfTestScrubAsync();

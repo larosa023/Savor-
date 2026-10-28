@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -27,6 +28,13 @@ public partial class ClipEditor : UserControl
     long _lastSeekTicks, _lastSyncTicks, _lastTextTicks, _lastTrimTextTicks;
     bool _renderHooked;
     Filmstrip? _strip;
+
+    // multi-track audio: played by Savor (Windows' player is silent on these files)
+    ClipAudio? _audio;
+    List<AudioTrackInfo> _tracks = new();
+    readonly List<int> _listen = new();
+    CancellationTokenSource? _audioCts;
+    long _lastAudioSync;
     DispatcherTimer? _hideScrub;
     string? _path;
     Func<EncoderDef?>? _encoder;
@@ -88,6 +96,10 @@ public partial class ClipEditor : UserControl
         Player.Effect = Shaders.ExpandRangeEffect.TryCreate();
         _ = DetectRangeAsync(path);
         Player.Source = new Uri(path);
+        ListenPanel.Visibility = Visibility.Collapsed;
+        ExportAudioLabel.Visibility = Visibility.Collapsed;
+        AudioSelectedItem.Visibility = Visibility.Collapsed;
+        _ = SetupTracksAsync(path);
         Player.Pause(); // opens the file and shows the first frame
         _clockBase = TimeSpan.Zero;
         _clock.Reset();
@@ -103,6 +115,10 @@ public partial class ClipEditor : UserControl
         _pendingSeek = null;
         _strip?.Dispose();
         _strip = null;
+        _audioCts?.Cancel();
+        _audio?.Dispose();
+        _audio = null;
+        Player.IsMuted = VolumeSlider.Value <= 0.001;
         ScrubFrame.Source = null;
         ScrubFrame.Visibility = Visibility.Collapsed;
         try { Player.Stop(); } catch { }
@@ -186,6 +202,83 @@ public partial class ClipEditor : UserControl
         catch { }
     }
 
+    /// <summary>Files with several audio tracks: show track toggles and play the audio ourselves.</summary>
+    async Task SetupTracksAsync(string path)
+    {
+        try
+        {
+            var tracks = await ClipAudio.ProbeAsync(path);
+            if (_path != path) return;
+            _tracks = tracks;
+            if (tracks.Count < 2) return; // Windows' player handles single-track files fine
+
+            Player.IsMuted = true;
+            _listen.Clear();
+            _listen.Add(0); // track 1 = the mix
+            ListenTracks.Children.Clear();
+            foreach (var t in tracks)
+            {
+                var tb = new System.Windows.Controls.Primitives.ToggleButton
+                {
+                    Style = (Style)FindResource("SegToggle"),
+                    Content = t.Index == 0 && t.Name == "Mix" ? "Mix (everything)" : t.Name,
+                    IsChecked = t.Index == 0,
+                    Tag = t.Index,
+                };
+                tb.Click += ListenTrack_Click;
+                ListenTracks.Children.Add(tb);
+            }
+            ListenPanel.Visibility = Visibility.Visible;
+            ExportAudioLabel.Visibility = Visibility.Visible;
+            AudioSelectedItem.Visibility = Visibility.Visible;
+            await PrepareAudioAsync();
+        }
+        catch { }
+    }
+
+    void ListenTrack_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Primitives.ToggleButton { Tag: int idx } tb) return;
+        if (tb.IsChecked == true) { if (!_listen.Contains(idx)) _listen.Add(idx); }
+        else _listen.Remove(idx);
+        _listen.Sort();
+        _ = PrepareAudioAsync();
+        Focus();
+    }
+
+    async Task PrepareAudioAsync()
+    {
+        if (_path == null) return;
+        _audioCts?.Cancel();
+        var cts = _audioCts = new CancellationTokenSource();
+        bool resume = _playing;
+        _audio?.Dispose();
+        _audio = null;
+        if (_listen.Count == 0)
+        {
+            ListenStatus.Text = "No tracks selected — muted.";
+            return;
+        }
+        ListenStatus.Text = "Loading audio…";
+        var audio = new ClipAudio();
+        audio.SetVolume((float)VolumeSlider.Value, VolumeSlider.Value <= 0.001);
+        try
+        {
+            await audio.PrepareAsync(_path, _listen.ToArray(), cts.Token);
+            if (cts.IsCancellationRequested) { audio.Dispose(); return; }
+            _audio = audio;
+            ListenStatus.Text = _listen.Count == 1 ? "" : $"{_listen.Count} tracks mixed together.";
+            if (resume && _playing) _audio.Play(Now);
+            else _audio.Seek(Now);
+        }
+        catch (OperationCanceledException) { audio.Dispose(); }
+        catch (Exception ex)
+        {
+            audio.Dispose();
+            ListenStatus.Text = ex.Message;
+        }
+    }
+
     void StartFilmstrip()
     {
         _strip?.Dispose();
@@ -218,6 +311,7 @@ public partial class ClipEditor : UserControl
         if (pos < _in || pos >= _out - TimeSpan.FromMilliseconds(50)) pos = _in;
         FlushSeek(pos);
         Player.Play();
+        _audio?.Play(pos);
         _playing = true;
         _hideScrub?.Stop();
         ScrubFrame.Visibility = Visibility.Collapsed;
@@ -231,6 +325,7 @@ public partial class ClipEditor : UserControl
     {
         var pos = Now;
         Player.Pause();
+        _audio?.Pause();
         _playing = false;
         _clock.Reset();
         _clockBase = pos;
@@ -260,6 +355,7 @@ public partial class ClipEditor : UserControl
         _pendingSeek = null;
         _lastSeekTicks = Environment.TickCount64;
         if (_opened) Player.Position = t;
+        _audio?.Seek(t);
     }
 
     /// <summary>Runs once per screen refresh while the editor is open.</summary>
@@ -280,6 +376,12 @@ public partial class ClipEditor : UserControl
             }
             else if (now - _lastSyncTicks > 300 && _pendingSeek == null)
             {
+                // keep Savor's audio lined up with the video
+                if (_audio is { Ready: true } && now - _lastAudioSync > 500)
+                {
+                    _lastAudioSync = now;
+                    if (Math.Abs((_audio.Position - Now).TotalMilliseconds) > 120) _audio.Seek(Now);
+                }
                 // re-anchor to the real position if we've drifted noticeably
                 _lastSyncTicks = now;
                 var real = Player.Position;
@@ -298,7 +400,8 @@ public partial class ClipEditor : UserControl
     {
         if (!_ready) return;
         Player.Volume = VolumeSlider.Value;
-        Player.IsMuted = VolumeSlider.Value <= 0.001;
+        Player.IsMuted = _tracks.Count > 1 || VolumeSlider.Value <= 0.001;
+        _audio?.SetVolume((float)VolumeSlider.Value, VolumeSlider.Value <= 0.001);
         VolIcon.Text = Player.IsMuted ? "" : "";
     }
 
@@ -591,6 +694,11 @@ public partial class ClipEditor : UserControl
         if (resume) Play();
     }
 
+    /// <summary>CI only: what the viewer found in the file's audio.</summary>
+    public string AudioDiag() =>
+        $"audio tracks={_tracks.Count} [{string.Join(", ", _tracks.Select(t => t.Name))}], listening={string.Join("+", _listen)}, " +
+        $"player ready={_audio?.Ready == true}, status=\"{ListenStatus.Text}\", windows player muted={Player.IsMuted}";
+
     /// <summary>CI only: simulates a fast drag of the start handle and reports per-frame cost.</summary>
     public async Task<string> SelfTestScrubAsync()
     {
@@ -830,6 +938,7 @@ public partial class ClipEditor : UserControl
         var audio = audioTag switch
         {
             "mix" => AudioExport.MixOnly,
+            "selected" => AudioExport.Selected,
             "none" => AudioExport.None,
             _ => AudioExport.AllTracks
         };
@@ -851,7 +960,8 @@ public partial class ClipEditor : UserControl
             Start = _in,
             End = _out,
             Crop = crop,
-            Audio = audio,
+            Audio = audio == AudioExport.Selected && _listen.Count == 0 ? AudioExport.None : audio,
+            Tracks = _listen.ToArray(),
             Fast = FastToggle.IsChecked == true && crop == null,
         };
 

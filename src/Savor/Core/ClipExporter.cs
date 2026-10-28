@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Savor.Core;
 
-public enum AudioExport { AllTracks, MixOnly, None }
+public enum AudioExport { AllTracks, MixOnly, Selected, None }
 
 public sealed class ExportRequest
 {
@@ -20,6 +21,8 @@ public sealed class ExportRequest
     /// <summary>Crop in source pixels, or null for the full frame.</summary>
     public System.Windows.Int32Rect? Crop { get; init; }
     public AudioExport Audio { get; init; } = AudioExport.AllTracks;
+    /// <summary>For <see cref="AudioExport.Selected"/>: audio track indices (mixed into one track, or copied as-is for fast export).</summary>
+    public int[] Tracks { get; init; } = Array.Empty<int>();
     /// <summary>Stream copy: instant and lossless, but cuts land on the nearest keyframe (≤2 s).</summary>
     public bool Fast { get; init; }
 }
@@ -74,6 +77,13 @@ public static class ClipExporter
         {
             case AudioExport.AllTracks: a.AddRange(new[] { "-map", "0:a?" }); break;
             case AudioExport.MixOnly: a.AddRange(new[] { "-map", "0:a:0?" }); break;
+            case AudioExport.Selected when r.Tracks.Length == 1 || enc == null:
+                foreach (var t in r.Tracks) a.AddRange(new[] { "-map", $"0:a:{t}" });
+                break;
+            case AudioExport.Selected:
+                var inputs = string.Concat(r.Tracks.Select(t => $"[0:a:{t}]"));
+                a.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={r.Tracks.Length}:normalize=0[am]", "-map", "[am]" });
+                break;
         }
 
         if (enc == null)
