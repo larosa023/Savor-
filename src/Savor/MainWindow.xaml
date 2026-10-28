@@ -1,0 +1,536 @@
+<Window x:Class="Savor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Savor" Width="1000" Height="680" MinWidth="780" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgBrush}" Foreground="{StaticResource TextBrush}"
+        FontFamily="{StaticResource UiFont}" FontSize="13"
+        Icon="Assets/savor.ico"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="52" ResizeBorderThickness="6" GlassFrameThickness="0"
+                      CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Storyboard x:Key="PulseLive" RepeatBehavior="Forever" AutoReverse="True">
+            <DoubleAnimation Storyboard.TargetName="BufferDotHalo" Storyboard.TargetProperty="Opacity"
+                             From="0.15" To="0.55" Duration="0:0:0.9"/>
+        </Storyboard>
+        <Storyboard x:Key="PulseRec" RepeatBehavior="Forever" AutoReverse="True">
+            <DoubleAnimation Storyboard.TargetName="RecDot" Storyboard.TargetProperty="Opacity"
+                             From="1" To="0.35" Duration="0:0:0.7"/>
+        </Storyboard>
+
+        <!-- clip card -->
+        <DataTemplate x:Key="ClipTemplate">
+            <Border x:Name="Card" Width="232" Margin="0,0,14,14" CornerRadius="12" Background="{StaticResource SurfaceBrush}"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" Cursor="Hand"
+                    Tag="{Binding}" MouseLeftButtonUp="ClipCard_Click" ToolTip="{Binding FilePath}">
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Open" Click="ClipOpen_Click"/>
+                        <MenuItem Header="Show in folder" Click="ClipReveal_Click"/>
+                        <MenuItem Header="Copy file" Click="ClipCopy_Click"/>
+                        <MenuItem Header="Delete" Click="ClipDelete_Click"/>
+                    </ContextMenu>
+                </Border.ContextMenu>
+                <StackPanel>
+                    <Grid Height="130" Margin="6,6,6,0">
+                        <Border CornerRadius="8" Background="{StaticResource Surface2Brush}"/>
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE714;" FontSize="22"
+                                   Foreground="{StaticResource FaintBrush}" HorizontalAlignment="Center"/>
+                        <Border CornerRadius="8">
+                            <Border.Background>
+                                <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill"/>
+                            </Border.Background>
+                        </Border>
+                        <Border Style="{StaticResource Chip}" Background="#B3000000" HorizontalAlignment="Left"
+                                VerticalAlignment="Top" Margin="8">
+                            <TextBlock Text="{Binding Kind}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                        </Border>
+                        <Border x:Name="DurationChip" Style="{StaticResource Chip}" Background="#B3000000"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8">
+                            <TextBlock Text="{Binding Duration}" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
+                        </Border>
+                    </Grid>
+                    <StackPanel Margin="12,10,12,12">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding Meta}" Foreground="{StaticResource MutedBrush}" FontSize="11.5" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasDuration}" Value="False">
+                    <Setter TargetName="DurationChip" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+                </DataTrigger>
+                <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="#55FF7A45"/>
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- settings row helpers -->
+        <Style x:Key="RowTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        </Style>
+        <Style x:Key="RowDesc" TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,24,0"/>
+        </Style>
+        <Style x:Key="Divider" TargetType="Border">
+            <Setter Property="Height" Value="1"/>
+            <Setter Property="Background" Value="{StaticResource LineBrush}"/>
+            <Setter Property="Margin" Value="0,14"/>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource Eyebrow}">
+            <Setter Property="Margin" Value="4,22,0,10"/>
+        </Style>
+        <Style x:Key="HotkeyButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+            <Setter Property="MinWidth" Value="150"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="Padding" Value="12,7"/>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="Root">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- ================= title bar ================= -->
+            <Grid Grid.Row="0" Margin="20,0,8,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid Width="22" Height="22" Margin="0,0,10,0">
+                        <Ellipse Fill="{StaticResource AccentBrush}"/>
+                        <Ellipse Width="9" Height="9" Fill="{StaticResource BgBrush}"/>
+                    </Grid>
+                    <TextBlock Text="Savor" FontFamily="{StaticResource DisplayFont}" FontSize="16" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Border x:Name="HeaderRecBadge" Style="{StaticResource Chip}" Background="{StaticResource RecSoftBrush}"
+                            Margin="14,0,0,0" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Fill="{StaticResource RecBrush}" Margin="0,0,6,0"/>
+                            <TextBlock x:Name="HeaderRecText" Text="REC 00:00" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource RecBrush}"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button x:Name="SettingsButton" Style="{StaticResource CaptionButton}" Click="Settings_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Settings">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE713;" FontSize="15"/>
+                    </Button>
+                    <Button Style="{StaticResource CaptionButton}" Click="Minimize_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE921;" FontSize="10"/>
+                    </Button>
+                    <Button Style="{StaticResource CloseButton}" Click="Close_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE8BB;" FontSize="10"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- ================= home ================= -->
+            <Grid x:Name="HomePage" Grid.Row="1" Margin="24,4,24,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- banner -->
+                <Border x:Name="Banner" Grid.Row="0" CornerRadius="10" Background="{StaticResource RecSoftBrush}"
+                        BorderBrush="#44FF4759" BorderThickness="1" Padding="14,10" Margin="0,0,0,14" Visibility="Collapsed">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,2" Click="DismissBanner_Click">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                        </Button>
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE783;" Foreground="{StaticResource RecBrush}" Margin="0,0,10,0"/>
+                        <TextBlock x:Name="BannerText" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="#FFC2C8"/>
+                    </DockPanel>
+                </Border>
+
+                <!-- two hero cards -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- replay buffer -->
+                    <Border Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <CheckBox x:Name="BufferToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}"
+                                          Click="BufferToggle_Click" VerticalAlignment="Top"/>
+                                <StackPanel>
+                                    <TextBlock Text="Replay buffer" Style="{StaticResource Eyebrow}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Grid Width="12" Height="12" Margin="0,0,10,0" VerticalAlignment="Center">
+                                            <Ellipse x:Name="BufferDotHalo" Fill="{StaticResource LiveBrush}" Opacity="0"/>
+                                            <Ellipse x:Name="BufferDot" Width="7" Height="7" Fill="{StaticResource FaintBrush}"/>
+                                        </Grid>
+                                        <TextBlock x:Name="BufferStatus" Text="Off" FontFamily="{StaticResource DisplayFont}"
+                                                   FontSize="24" FontWeight="SemiBold"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock x:Name="BufferHint" Grid.Row="1" Style="{StaticResource Muted}" Margin="0,10,0,18"
+                                       Text="Keeps the last minute of your screen ready to save as a clip."/>
+                            <Button x:Name="SaveClipButton" Grid.Row="2" Style="{StaticResource PrimaryButton}"
+                                    HorizontalContentAlignment="Stretch" Click="SaveClip_Click" IsEnabled="False" Padding="16,11">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Right" CornerRadius="5" Background="#26000000" Padding="7,2">
+                                        <TextBlock x:Name="SaveClipHotkeyText" Text="Alt + F10" FontSize="11.5" FontWeight="SemiBold"/>
+                                    </Border>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="&#xE74E;" Margin="0,0,10,0"/>
+                                        <TextBlock x:Name="SaveClipText" Text="Save clip" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- recording -->
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Recording" Style="{StaticResource Eyebrow}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Grid Width="12" Height="12" Margin="0,0,10,0" VerticalAlignment="Center">
+                                        <Ellipse x:Name="RecDot" Width="7" Height="7" Fill="{StaticResource FaintBrush}"/>
+                                    </Grid>
+                                    <TextBlock x:Name="RecTimer" Text="00:00:00" FontFamily="{StaticResource DisplayFont}"
+                                               FontSize="24" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <TextBlock x:Name="RecHint" Grid.Row="1" Style="{StaticResource Muted}" Margin="0,10,0,18"
+                                       Text="Records your screen until you stop. Shares the encoder with the replay buffer."/>
+                            <Button x:Name="RecordButton" Grid.Row="2" Style="{StaticResource RecordButton}"
+                                    HorizontalContentAlignment="Stretch" Click="Record_Click" Padding="16,11">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Right" CornerRadius="5" Background="#22FF4759" Padding="7,2">
+                                        <TextBlock x:Name="RecordHotkeyText" Text="Alt + F9" FontSize="11.5" FontWeight="SemiBold"/>
+                                    </Border>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="RecordIcon" Style="{StaticResource Icon}" Text="&#xE7C8;" Margin="0,0,10,0"/>
+                                        <TextBlock x:Name="RecordText" Text="Start recording" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- status strip -->
+                <Border Grid.Row="2" Style="{StaticResource Card}" Padding="18,12" Margin="0,16,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE767;" Foreground="{StaticResource MutedBrush}" Margin="0,0,8,0"/>
+                            <Grid Width="90" Height="5" VerticalAlignment="Center">
+                                <Border CornerRadius="2.5" Background="{StaticResource Surface3Brush}"/>
+                                <Border x:Name="DesktopMeter" CornerRadius="2.5" Background="{StaticResource LiveBrush}"
+                                        HorizontalAlignment="Left" Width="0"/>
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="22,0,0,0">
+                            <TextBlock x:Name="MicIcon" Style="{StaticResource Icon}" Text="&#xE720;" Foreground="{StaticResource MutedBrush}" Margin="0,0,8,0"/>
+                            <Grid Width="90" Height="5" VerticalAlignment="Center">
+                                <Border CornerRadius="2.5" Background="{StaticResource Surface3Brush}"/>
+                                <Border x:Name="MicMeter" CornerRadius="2.5" Background="{StaticResource LiveBrush}"
+                                        HorizontalAlignment="Left" Width="0"/>
+                            </Grid>
+                        </StackPanel>
+                        <TextBlock x:Name="CaptureInfo" Grid.Column="2" Margin="22,0,12,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Text="Detecting encoders…"/>
+                        <Button Grid.Column="3" Style="{StaticResource GhostButton}" Click="Settings_Click" Content="Change"/>
+                    </Grid>
+                </Border>
+
+                <!-- recent header -->
+                <DockPanel Grid.Row="3" Margin="2,24,0,12">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Click="OpenFolder_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="13" Margin="0,0,8,0"/>
+                            <TextBlock Text="Open folder"/>
+                        </StackPanel>
+                    </Button>
+                    <TextBlock Text="Recent captures" FontFamily="{StaticResource DisplayFont}" FontSize="16"
+                               FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ClipCount" Foreground="{StaticResource FaintBrush}" Margin="10,0,0,0"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
+
+                <!-- recent list -->
+                <Grid Grid.Row="4">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,-10,0">
+                        <ItemsControl x:Name="ClipList" ItemTemplate="{StaticResource ClipTemplate}" Margin="0,0,0,10">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,0,40">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE8B2;" FontSize="28" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource FaintBrush}"/>
+                        <TextBlock Text="Nothing captured yet" HorizontalAlignment="Center" Margin="0,12,0,4" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="EmptyHint" Text="Turn on the replay buffer, then press Alt + F10 to save a clip."
+                                   HorizontalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <!-- ================= settings ================= -->
+            <Grid x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="24,4,24,28" MaxWidth="760">
+                        <DockPanel>
+                            <Button Style="{StaticResource GhostButton}" Click="Back_Click" Padding="8,6" Margin="-8,0,8,0">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE72B;" FontSize="14" Foreground="{StaticResource TextBrush}"/>
+                            </Button>
+                            <TextBlock Text="Settings" FontFamily="{StaticResource DisplayFont}" FontSize="22"
+                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <Border x:Name="ApplyNote" CornerRadius="8" Background="{StaticResource AccentSoftBrush}" Padding="12,8"
+                                Margin="0,14,0,0" Visibility="Collapsed">
+                            <TextBlock Text="Capture changes will apply when the current recording stops."
+                                       Foreground="{StaticResource AccentBrush}" FontSize="12.5"/>
+                        </Border>
+
+                        <!-- capture -->
+                        <TextBlock Text="Capture" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <ComboBox x:Name="DisplayCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Display" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Which monitor to capture." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="FpsCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Frame rate" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Higher looks smoother but makes bigger files." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="QualityCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Quality" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Constant-quality encoding; file size follows how busy the screen is." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Click="Redetect_Click" Margin="0,0,6,0"
+                                                ToolTip="Test encoders again">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE72C;" FontSize="13"/>
+                                        </Button>
+                                        <ComboBox x:Name="EncoderCombo" SelectionChanged="Capture_Changed"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Encoder" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="EncoderDesc" Text="GPU encoders keep games running smoothly." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="CursorToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Capture mouse cursor" Style="{StaticResource RowTitle}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- replay buffer -->
+                        <TextBlock Text="Replay buffer" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Slider x:Name="ReplaySlider" Width="200" Minimum="10" Maximum="600" SmallChange="5"
+                                                LargeChange="30" TickFrequency="5" IsSnapToTickEnabled="True"
+                                                ValueChanged="ReplaySlider_Changed"/>
+                                        <TextBlock x:Name="ReplayValue" Width="64" TextAlignment="Right" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" Text="1:00"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Clip length" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="How far back a saved clip reaches." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="AutoBufferToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Start replay buffer when Savor opens" Style="{StaticResource RowTitle}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- audio -->
+                        <TextBlock Text="Audio" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <CheckBox x:Name="DesktopAudioToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Desktop audio" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Everything playing through your default speakers or headset." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Slider x:Name="DesktopVolumeSlider" Width="200" Minimum="0" Maximum="200"
+                                                ValueChanged="Volume_Changed"/>
+                                        <TextBlock x:Name="DesktopVolumeValue" Width="64" TextAlignment="Right" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Desktop volume" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="MicCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed" MinWidth="260"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Microphone" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Mixed into the same audio track." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Slider x:Name="MicVolumeSlider" Width="200" Minimum="0" Maximum="200"
+                                                ValueChanged="Volume_Changed"/>
+                                        <TextBlock x:Name="MicVolumeValue" Width="64" TextAlignment="Right" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Microphone volume" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- output -->
+                        <TextBlock Text="Output" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource BaseButton}" Content="Browse…"
+                                            Click="Browse_Click" Margin="10,0,0,0" FontWeight="Normal"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Save captures to" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="OutputFolderText" Style="{StaticResource RowDesc}" TextTrimming="CharacterEllipsis"
+                                                   TextWrapping="NoWrap"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="ContainerCombo" DockPanel.Dock="Right" SelectionChanged="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="File format" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="MP4 plays everywhere. MKV is friendlier to video editors." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- hotkeys -->
+                        <TextBlock Text="Hotkeys" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <Button x:Name="SaveClipHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
+                                            Tag="save" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <TextBlock Text="Save clip" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <Button x:Name="RecordHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
+                                            Tag="record" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <TextBlock Text="Start / stop recording" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <Button x:Name="BufferHotkeyButton" DockPanel.Dock="Right" Style="{StaticResource HotkeyButton}"
+                                            Tag="buffer" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" LostFocus="Hotkey_LostFocus"/>
+                                    <TextBlock Text="Turn replay buffer on / off" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <TextBlock x:Name="HotkeyNote" Style="{StaticResource RowDesc}" Margin="0,14,0,0"
+                                           Text="Click a shortcut, then press the new keys. Backspace clears it, Esc cancels."/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- general -->
+                        <TextBlock Text="General" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <CheckBox x:Name="StartupToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Launch when Windows starts" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Starts quietly in the tray." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="TrayToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Keep running in the tray when closed" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="So hotkeys keep working after you close the window." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="NotifyToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Show a notification when a capture is saved" Style="{StaticResource RowTitle}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock x:Name="AboutText" Style="{StaticResource Muted}" FontSize="11.5" Margin="4,20,0,0"
+                                   Foreground="{StaticResource FaintBrush}"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
