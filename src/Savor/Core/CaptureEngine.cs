@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Pipes;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,11 +26,10 @@ public sealed class CaptureEngine : IDisposable
 
     Process? _proc;
     AudioMixer? _mixer;
-    NamedPipeServerStream? _pipe;
     BlockingCollection<byte[]>? _audioQueue;
-    CancellationTokenSource? _pipeCts;
     Thread? _writer;
     volatile bool _audioConnected;
+    bool _audioOn;
     volatile bool _expectedExit;
 
     int _recordFrom = -1;
@@ -207,22 +205,15 @@ public sealed class CaptureEngine : IDisposable
         // ---- audio ----
         bool audio = s.DesktopAudio || !string.IsNullOrEmpty(s.MicDeviceId);
         int rate = 48000;
-        string pipeName = "savor-" + Guid.NewGuid().ToString("N");
         if (audio)
         {
             try
             {
                 _mixer = new AudioMixer(s.DesktopAudio, s.DesktopVolume, s.MicDeviceId, s.MicVolume);
                 rate = _mixer.SampleRate;
-                _pipe = new NamedPipeServerStream(pipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous, 0, 1 << 20);
                 _audioQueue = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>(), 1024);
-                _pipeCts = new CancellationTokenSource();
                 _audioConnected = false;
                 _mixer.DataAvailable += OnAudio;
-                var pipe = _pipe; var q = _audioQueue; var ct = _pipeCts.Token;
-                _writer = new Thread(() => WriterLoop(pipe, q, ct)) { IsBackground = true, Name = "Savor audio pipe" };
-                _writer.Start();
                 _mixer.Start();
             }
             catch (Exception ex)
@@ -234,7 +225,7 @@ public sealed class CaptureEngine : IDisposable
         }
 
         // ---- ffmpeg ----
-        var args = BuildArgs(s, enc, audio, rate, pipeName);
+        var args = BuildArgs(s, enc, audio, rate);
         var p = new Process { StartInfo = Ffmpeg.StartInfo(args, redirectInput: true), EnableRaisingEvents = true };
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) AddLog(e.Data!); };
         p.OutputDataReceived += (_, _) => { };
@@ -248,17 +239,28 @@ public sealed class CaptureEngine : IDisposable
             throw;
         }
         try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
+        _audioOn = audio;
+        if (audio && _audioQueue != null)
+        {
+            // Audio goes to ffmpeg over stdin (raw 32-bit float PCM).
+            var stdin = p.StandardInput.BaseStream;
+            var q = _audioQueue;
+            _writer = new Thread(() => WriterLoop(stdin, q)) { IsBackground = true, Name = "Savor audio feed" };
+            _audioConnected = true;
+            _writer.Start();
+        }
         p.BeginErrorReadLine();
         p.BeginOutputReadLine();
         _proc = p;
         StartedUtc = DateTime.UtcNow;
     }
 
-    List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate, string pipeName)
+    List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate)
     {
         var d = Display;
         int fps = s.Fps;
         var a = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y" };
+        if (audio) a.Add("-nostdin"); // stdin carries audio, not keyboard commands
 
         if (enc.Pipeline == CapturePipeline.Gdi)
         {
@@ -277,7 +279,7 @@ public sealed class CaptureEngine : IDisposable
         if (audio)
         {
             a.AddRange(new[] { "-thread_queue_size", "4096", "-f", "f32le", "-ar", rate.ToString(), "-ac", "2",
-                               "-i", $@"\\.\pipe\{pipeName}" });
+                               "-i", "pipe:0" });
         }
 
         a.AddRange(new[] { "-map", "0:v" });
@@ -287,7 +289,7 @@ public sealed class CaptureEngine : IDisposable
         if (vf != null) a.AddRange(new[] { "-vf", vf });
         a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
 
-        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k", "-ar", "48000" });
+        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest" });
 
         a.AddRange(new[]
         {
@@ -308,10 +310,18 @@ public sealed class CaptureEngine : IDisposable
         {
             if (!p.HasExited)
             {
-                try { p.StandardInput.Write('q'); p.StandardInput.Flush(); } catch { }
-                // Stop feeding audio so ffmpeg's audio input reaches EOF too.
-                _mixer?.Stop();
-                _audioQueue?.CompleteAdding();
+                if (_audioOn)
+                {
+                    // Ending the audio stream (closing stdin) makes ffmpeg finish cleanly thanks to -shortest.
+                    _mixer?.Stop();
+                    try { _audioQueue?.CompleteAdding(); } catch { }
+                    _writer?.Join(2000);
+                    try { p.StandardInput.Close(); } catch { }
+                }
+                else
+                {
+                    try { p.StandardInput.Write('q'); p.StandardInput.Flush(); } catch { }
+                }
                 if (!p.WaitForExit(8000))
                 {
                     try { p.Kill(true); } catch { }
@@ -368,7 +378,8 @@ public sealed class CaptureEngine : IDisposable
 
     static string FriendlyError(string log)
     {
-        var last = log.Split(Environment.NewLine).LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "";
+        var lines = log.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+        var last = string.Join("  |  ", lines.Skip(Math.Max(0, lines.Count - 3)));
         if (log.Contains("DXGI_ERROR_ACCESS_LOST") || log.Contains("AcquireNextFrame"))
             return "Screen capture was interrupted (display mode changed or a secure screen appeared). Turn the replay buffer back on to resume.";
         if (log.Contains("DXGI_ERROR_UNSUPPORTED") || log.Contains("DuplicateOutput"))
@@ -387,16 +398,15 @@ public sealed class CaptureEngine : IDisposable
         try { q.TryAdd(copy); } catch (InvalidOperationException) { }
     }
 
-    void WriterLoop(NamedPipeServerStream pipe, BlockingCollection<byte[]> q, CancellationToken ct)
+    void WriterLoop(Stream output, BlockingCollection<byte[]> q)
     {
         try
         {
-            pipe.WaitForConnectionAsync(ct).GetAwaiter().GetResult();
-            _audioConnected = true;
-            foreach (var buf in q.GetConsumingEnumerable(ct))
-                pipe.Write(buf, 0, buf.Length);
+            foreach (var buf in q.GetConsumingEnumerable())
+                output.Write(buf, 0, buf.Length);
+            output.Flush();
         }
-        catch { /* pipe closed or cancelled */ }
+        catch { /* ffmpeg exited */ }
         finally { _audioConnected = false; }
     }
 
@@ -410,15 +420,10 @@ public sealed class CaptureEngine : IDisposable
             _mixer = null;
         }
         try { _audioQueue?.CompleteAdding(); } catch { }
-        try { _pipeCts?.Cancel(); } catch { }
-        try { _pipe?.Dispose(); } catch { }
         _writer?.Join(1500);
         _writer = null;
-        _pipe = null;
         _audioQueue?.Dispose();
         _audioQueue = null;
-        _pipeCts?.Dispose();
-        _pipeCts = null;
     }
 
     // ================= segments =================
