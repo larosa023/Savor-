@@ -21,24 +21,25 @@ jobs:
 
       - name: Fetch FFmpeg (embedded into Savor.exe)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Pinned to a stable release branch (8.0 has GPU scaling for the live preview), falling back to 7.1.
-          $base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
-          $ok = $false
-          foreach ($f in @("ffmpeg-n8.0-latest-win64-gpl-8.0.zip", "ffmpeg-n7.1-latest-win64-gpl-7.1.zip")) {
-            try { Invoke-WebRequest "$base/$f" -OutFile ffmpeg.zip; Write-Host "Using $f"; $ok = $true; break } catch { Write-Warning "$f not found" }
-          }
-          if (-not $ok) { throw "No FFmpeg build found" }
+          # Newest stable release-branch build (e.g. n8.0) from BtbN, falling back to master.
+          $assets = gh release view latest -R BtbN/FFmpeg-Builds --json assets --jq '.assets[].name'
+          $stable = $assets | Where-Object { $_ -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-[\d.]+\.zip$' } |
+            Sort-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') } -Descending
+          $pick = if ($stable) { $stable[0] } else { "ffmpeg-master-latest-win64-gpl.zip" }
+          Write-Host "::notice::FFmpeg build: $pick"
+          gh release download latest -R BtbN/FFmpeg-Builds -p $pick -O ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
           $exe = Get-ChildItem ffmpeg-dl -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          & $exe.FullName -hide_banner -version | Select-Object -First 1
-          & $exe.FullName -hide_banner -filters | Select-String "ddagrab|scale_d3d11"
+          $filters = (& $exe.FullName -hide_banner -filters) -join "`n"
+          Write-Host "::notice::ddagrab=$($filters -match 'ddagrab') scale_d3d11=$($filters -match 'scale_d3d11')"
           New-Item -ItemType Directory -Force ffmpeg | Out-Null
           $in = [IO.File]::OpenRead($exe.FullName)
           $out = [IO.File]::Create("ffmpeg/ffmpeg.exe.gz")
           $gz = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
           $in.CopyTo($gz); $gz.Dispose(); $out.Dispose(); $in.Dispose()
-          Get-Item ffmpeg/ffmpeg.exe.gz | Select-Object Name, Length
 
       - name: Publish Savor.exe
         run: >
