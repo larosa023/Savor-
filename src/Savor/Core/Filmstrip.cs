@@ -57,6 +57,7 @@ public sealed class Filmstrip : IDisposable
             var p = new Process { StartInfo = Ffmpeg.StartInfo(args) };
             p.ErrorDataReceived += (_, _) => { };
             p.Start();
+            ChildProcesses.Track(p);
             _proc = p;
             try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
             p.BeginErrorReadLine();

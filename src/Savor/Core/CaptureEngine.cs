@@ -35,6 +35,17 @@ public sealed class CaptureEngine : IDisposable
     int _recordFrom = -1;
     volatile int _holdFrom = int.MaxValue;
 
+    // ---- self-healing: reconnect after display/audio/driver interruptions, keeping the buffer ----
+    int _recoverScheduled;
+    int _failures;               // consecutive starts that died quickly
+    bool _failNotified;
+    int _lastNewest = -1;
+    long _lastSegmentTicks;
+    const int StallSeconds = 12; // no new 2 s segment for this long = stuck
+
+    /// <summary>Raised when capture is working again after an interruption that was reported (any thread).</summary>
+    public event Action? Recovered;
+
     public string BufferDir { get; } = Path.Combine(AppSettings.LocalDataDir, "buffer");
     public EncoderChoice? Encoder { get; set; }
     public DisplayInfo? Display { get; set; }
@@ -58,8 +69,6 @@ public sealed class CaptureEngine : IDisposable
     public event Action? StateChanged;
     /// <summary>Raised when capture fails unexpectedly (any thread).</summary>
     public event Action<string>? Failed;
-    /// <summary>Raised when a recording was salvaged after a crash (any thread).</summary>
-    public event Action<string>? RecordingSalvaged;
 
     public CaptureEngine(Func<AppSettings> settings)
     {
@@ -75,7 +84,7 @@ public sealed class CaptureEngine : IDisposable
         try
         {
             if (BufferActive) return;
-            StartProcessIfNeeded();
+            StartProcessIfNeeded(fresh: !Recording);
             BufferActive = true;
         }
         finally { _op.Release(); StateChanged?.Invoke(); }
@@ -99,7 +108,7 @@ public sealed class CaptureEngine : IDisposable
         await _op.WaitAsync();
         try
         {
-            if (!BufferActive || !IsRunning) return null;
+            if (!BufferActive) return null; // works during a reconnect too: the buffered pieces are still there
             var s = _settings();
             var segs = Segments();
             if (segs.Count == 0) return null;
@@ -123,8 +132,8 @@ public sealed class CaptureEngine : IDisposable
         try
         {
             if (Recording) return;
-            bool fresh = !IsRunning;
-            StartProcessIfNeeded();
+            bool fresh = !IsRunning && !BufferActive;
+            StartProcessIfNeeded(fresh: fresh);
             var segs = Segments();
             _recordFrom = fresh || segs.Count == 0 ? 0 : segs[^1].Index;
             RecordingStartedUtc = DateTime.UtcNow;
@@ -173,7 +182,7 @@ public sealed class CaptureEngine : IDisposable
             if (!IsRunning) return true;
             if (Recording) return false;
             StopProcess();
-            StartProcessIfNeeded();
+            StartProcessIfNeeded(fresh: true); // new settings (tracks, size) can't be joined to old pieces
             return true;
         }
         finally { _op.Release(); StateChanged?.Invoke(); }
@@ -181,6 +190,7 @@ public sealed class CaptureEngine : IDisposable
 
     public async Task ShutdownAsync()
     {
+        Interlocked.Exchange(ref _recoverScheduled, 1); // no reconnects while closing
         if (Recording) await StopRecordingAsync();
         await _op.WaitAsync();
         try
@@ -199,15 +209,22 @@ public sealed class CaptureEngine : IDisposable
 
     // ================= process management =================
 
-    void StartProcessIfNeeded()
+    int _startNumber;
+
+    /// <param name="fresh">Start a new buffer (true) or continue after an interruption, keeping what's buffered (false).</param>
+    void StartProcessIfNeeded(bool fresh)
     {
         if (IsRunning) return;
         if (Ffmpeg.Path == null) throw new InvalidOperationException("FFmpeg was not found.");
         var enc = Encoder ?? throw new InvalidOperationException("No working video encoder was found on this PC.");
         var s = _settings();
 
-        ClearBufferDir();
+        if (fresh) ClearBufferDir();
         Directory.CreateDirectory(BufferDir);
+        var existing = Segments();
+        _startNumber = existing.Count > 0 ? existing[^1].Index + 1 : 0; // continue numbering so pieces stay in order
+        _lastNewest = -1;
+        _lastSegmentTicks = Environment.TickCount64;
         lock (_log) _log.Clear();
 
         // ---- audio ----
@@ -225,6 +242,7 @@ public sealed class CaptureEngine : IDisposable
                     MicMuted = s.MicMuted,
                 };
                 rate = _mixer.SampleRate;
+                _mixer.DeviceLost += () => ScheduleRecovery("audio device changed", 800);
                 _audioQueue = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>(), 1024);
                 _audioConnected = false;
                 _mixer.DataAvailable += OnAudio;
@@ -253,6 +271,7 @@ public sealed class CaptureEngine : IDisposable
             p.Dispose();
             throw;
         }
+        ChildProcesses.Track(p);
         try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
         _audioOn = audio;
         if (audio && _audioQueue != null)
@@ -321,6 +340,7 @@ public sealed class CaptureEngine : IDisposable
             "-f", "segment",
             "-segment_time", SegmentSeconds.ToString(),
             "-segment_format", "mpegts",
+            "-segment_start_number", _startNumber.ToString(),
             Path.Combine(BufferDir, "seg_%06d.ts")
         });
         return a;
@@ -366,39 +386,77 @@ public sealed class CaptureEngine : IDisposable
     void OnProcessExited(object? sender, EventArgs e)
     {
         if (_expectedExit || !ReferenceEquals(sender, _proc)) return;
+        // died within 10 s of starting = a failed start; otherwise a one-off interruption
+        bool quick = (DateTime.UtcNow - StartedUtc).TotalSeconds < 10;
+        if (quick) Interlocked.Increment(ref _failures);
+        int f = Volatile.Read(ref _failures);
+        int delay = f == 0 ? 500 : (int)Math.Min(30_000, 1000 * Math.Pow(2, f - 1));
+        ScheduleRecovery(FriendlyError(RecentLog()), delay);
+    }
+
+    /// <summary>
+    /// Restarts capture after an interruption (display mode change, secure screen, audio device switch,
+    /// driver reset, sleep). Keeps the replay buffer and an ongoing recording; new pieces continue where
+    /// the old ones stopped, so saved clips and recordings just have a short gap.
+    /// </summary>
+    void ScheduleRecovery(string reason, int delayMs)
+    {
+        if (Interlocked.Exchange(ref _recoverScheduled, 1) == 1) return;
+        AddLog("Reconnecting: " + reason);
         _ = Task.Run(async () =>
         {
-            await _op.WaitAsync();
-            bool wasRecording;
-            int from;
+            await Task.Delay(delayMs).ConfigureAwait(false);
+            bool notify = false;
+            string message = reason;
+            await _op.WaitAsync().ConfigureAwait(false);
             try
             {
-                if (_expectedExit || !ReferenceEquals(sender, _proc)) return;
-                wasRecording = Recording;
-                from = _recordFrom;
-                Recording = false;
-                BufferActive = false;
-                _recordFrom = -1;
-                TeardownAudio();
-                try { _proc?.Dispose(); } catch { }
-                _proc = null;
-
-                if (wasRecording && from >= 0)
+                Interlocked.Exchange(ref _recoverScheduled, 0);
+                if (!BufferActive && !Recording) return; // turned off meanwhile
+                StopProcess();
+                try { StartProcessIfNeeded(fresh: false); }
+                catch (Exception ex)
                 {
-                    var s = _settings();
-                    var segs = Segments().Where(x => x.Index >= from).ToList();
-                    if (segs.Count > 0)
-                    {
-                        var output = OutputPath("Recording", s);
-                        if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s))
-                            RecordingSalvaged?.Invoke(output);
-                    }
+                    message = ex.Message;
+                    Interlocked.Increment(ref _failures);
+                    int f = Volatile.Read(ref _failures);
+                    ScheduleRecovery(message, (int)Math.Min(30_000, 1000 * Math.Pow(2, f - 1)));
                 }
+                if (Volatile.Read(ref _failures) >= 3 && !_failNotified) { _failNotified = true; notify = true; }
             }
             finally { _op.Release(); }
             StateChanged?.Invoke();
-            Failed?.Invoke(FriendlyError(RecentLog()));
+            if (notify) Failed?.Invoke(message + " Savor keeps retrying and will resume on its own.");
         });
+    }
+
+    /// <summary>Called every second: notices when capture is producing again, or has silently stalled.</summary>
+    void Watchdog(List<Segment> segs)
+    {
+        if (!IsRunning) return;
+        int newest = segs.Count > 0 ? segs[^1].Index : -1;
+        long now = Environment.TickCount64;
+        if (newest != _lastNewest)
+        {
+            if (_lastNewest >= 0 || newest > _startNumber)
+            {
+                // new pieces are arriving: capture is healthy
+                if (Interlocked.Exchange(ref _failures, 0) > 0 && _failNotified)
+                {
+                    _failNotified = false;
+                    Recovered?.Invoke();
+                }
+            }
+            _lastNewest = newest;
+            _lastSegmentTicks = now;
+            return;
+        }
+        if (now - _lastSegmentTicks > StallSeconds * 1000 && (DateTime.UtcNow - StartedUtc).TotalSeconds > StallSeconds)
+        {
+            _lastSegmentTicks = now; // don't fire again while recovering
+            AddLog("Capture stalled (no new video for 12 s).");
+            ScheduleRecovery("Capture stopped responding (for example after sleep).", 0);
+        }
     }
 
     static string FriendlyError(string log)
@@ -477,6 +535,7 @@ public sealed class CaptureEngine : IDisposable
         {
             if (!IsRunning) return;
             var segs = Segments();
+            Watchdog(segs);
             if (segs.Count == 0) return;
             int newest = segs[^1].Index;
             int need = (int)Math.Ceiling(_settings().ReplaySeconds / (double)SegmentSeconds) + 3;

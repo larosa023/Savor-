@@ -104,9 +104,11 @@ jobs:
           $kids | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           Start-Sleep 3
 
-          # second run: started in the tray (how it sits while gaming), replay buffer on
-          $p = Start-Process publish/Savor.exe -ArgumentList "--minimized" -PassThru
-          Start-Sleep 30
+          # second run: open, go to the tray like the X button does, then press Alt+F10 like a real keyboard
+          Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "Clip *.mp4" -ErrorAction SilentlyContinue | Remove-Item -Force
+          $env:SAVOR_SELFTEST_TRAY = "1"
+          $p = Start-Process publish/Savor.exe -PassThru
+          Start-Sleep 55
           $p.Refresh()
           $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
           $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"
@@ -114,8 +116,23 @@ jobs:
           $line2 = "In tray: private working set $(Mb $pws) MB, private bytes $(Mb $p.PrivateMemorySize64) MB | children: $kidTxt"
           Write-Host "::notice::$line2"
           $line2 | Out-File diag.txt -Append
+          [System.Windows.Forms.SendKeys]::SendWait("%{F10}")
+          Start-Sleep 12
+          $clips = Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "Clip *.mp4" -ErrorAction SilentlyContinue
+          $ffx = Get-ChildItem "$env:LOCALAPPDATA\Savor\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if ($clips) {
+            foreach ($c in $clips) {
+              $info = (& $ffx.FullName -hide_banner -i $c.FullName 2>&1) -join " "
+              $dur = if ($info -match "Duration: ([0-9:.]+)") { $Matches[1] } else { "?" }
+              $l = "TRAY CLIP OK: $($c.Name) $([math]::Round($c.Length/1MB,1)) MB, duration $dur"
+              Write-Host "::notice::$l"; $l | Out-File diag.txt -Append
+            }
+          } else { Write-Host "::warning::TRAY CLIP MISSING"; "TRAY CLIP MISSING" | Out-File diag.txt -Append }
+          $stl = "$env:LOCALAPPDATA\Savor\selftest.log"
+          if (Test-Path $stl) { Get-Content $stl | ForEach-Object { Write-Host "::notice::tray log: $_" }; Get-Content $stl | Out-File diag.txt -Append; Remove-Item $stl }
+          $env:SAVOR_SELFTEST_TRAY = $null
           Stop-Process -Id $p.Id -Force
-          $kids | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           Start-Sleep 3
 
           # third run: open a generated test clip in the built-in editor

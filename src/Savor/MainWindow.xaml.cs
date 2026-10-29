@@ -69,7 +69,11 @@ public partial class MainWindow : Window
         _engine = new CaptureEngine(() => _settings);
         _engine.StateChanged += () => Dispatcher.BeginInvoke(RefreshState);
         _engine.Failed += msg => Dispatcher.BeginInvoke(() => ShowError(msg));
-        _engine.RecordingSalvaged += path => Dispatcher.BeginInvoke(() => OnSaved(path, recording: true));
+        _engine.Recovered += () => Dispatcher.BeginInvoke(() =>
+        {
+            HideError();
+            if (!IsVisible) Notify("Capture resumed", "Savor reconnected and is capturing again.");
+        });
 
         ClipList.ItemsSource = _clips;
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(66) };
@@ -133,7 +137,6 @@ public partial class MainWindow : Window
         ReloadClips();
         RefreshState();
         _uiTimer.Start();
-        if (!_renderHooked) { CompositionTarget.Rendering += OnRendering; _renderHooked = true; }
 
         CaptureInfo.Text = "Getting ready…";
         if (!await Ffmpeg.EnsureAsync())
@@ -163,6 +166,13 @@ public partial class MainWindow : Window
 
         if (_settings.StartBufferOnLaunch && _engine.Encoder != null)
             await ToggleBufferAsync(forceOn: true);
+
+        if (Environment.GetEnvironmentVariable("SAVOR_SELFTEST_TRAY") == "1")
+        {
+            await Task.Delay(8000);
+            SelfLog("tray test: hiding to tray (like the X button)");
+            Hide();
+        }
     }
 
     async Task DetectEncodersAsync(bool force)
@@ -213,6 +223,7 @@ public partial class MainWindow : Window
 
     async Task SaveClipAsync()
     {
+        SelfLog($"save clip requested (window visible={IsVisible}, buffer={_engine.BufferActive}, running={_engine.IsRunning})");
         if (_busy) return;
         if (!_engine.BufferActive)
         {
@@ -225,6 +236,7 @@ public partial class MainWindow : Window
         try
         {
             var path = await _engine.SaveReplayAsync();
+            SelfLog("save clip result: " + (path ?? "null"));
             if (path != null) OnSaved(path, recording: false);
             else Notify("Couldn't save clip", "Give the buffer a moment to fill up, then try again.", error: true);
         }
@@ -422,6 +434,11 @@ public partial class MainWindow : Window
 
         CheckDiskSpace(); // runs even while hidden in the tray (throttled to every 10 s)
         bool shown = IsVisible && WindowState != WindowState.Minimized;
+        // studio meters/preview only need per-frame updates on the Studio page; the editor drives its own
+        SetRenderHook(shown && StudioPage.Visibility == Visibility.Visible);
+        // in the tray Savor only needs to check things about once a second
+        var interval = TimeSpan.FromMilliseconds(shown ? 66 : 1000);
+        if (_uiTimer.Interval != interval) _uiTimer.Interval = interval;
         UpdatePreview(shown);
         UpdateMonitor(shown);
         if (!shown) return;
@@ -481,6 +498,19 @@ public partial class MainWindow : Window
     bool _previewGpuFailed;
     bool _previewWanted;
     bool _renderHooked;
+    bool _previewIdle;
+
+    /// <summary>
+    /// Per-frame updates (meters, live preview) only while the window is on screen. An attached
+    /// CompositionTarget.Rendering handler keeps WPF redrawing every frame, so it's removed when hidden.
+    /// </summary>
+    void SetRenderHook(bool on)
+    {
+        if (on == _renderHooked) return;
+        if (on) CompositionTarget.Rendering += OnRendering;
+        else CompositionTarget.Rendering -= OnRendering;
+        _renderHooked = on;
+    }
 
     void UpdatePreview(bool shown)
     {
@@ -488,8 +518,11 @@ public partial class MainWindow : Window
         var enc = _engine.Encoder;
         _previewWanted = shown && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
                          && d != null && enc != null && Ffmpeg.Path != null;
+        if (_previewWanted) _previewIdle = false;
         if (!_previewWanted)
         {
+            if (_previewIdle) return; // already cleaned up; nothing to do every tick
+            _previewIdle = true;
             if (_preview.IsRunning) _preview.Stop();
             _previewHasFrame = false;
             PreviewBrush.ImageSource = null;
@@ -500,11 +533,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!_renderHooked)
-        {
-            CompositionTarget.Rendering += OnRendering;
-            _renderHooked = true;
-        }
 
         // GPU downscale isn't available on every driver/ffmpeg: fall back if it produced nothing.
         if (_preview.GpuScale && _preview.FramesReceived == 0 &&
@@ -595,6 +623,15 @@ public partial class MainWindow : Window
                     DesktopMuted = _settings.DesktopMuted,
                     MicMuted = _settings.MicMuted,
                 };
+                var mon = _monitor;
+                mon.DeviceLost += () => Dispatcher.BeginInvoke(() =>
+                {
+                    // output device changed: rebuild the level meters on the new device shortly
+                    if (!ReferenceEquals(_monitor, mon)) return;
+                    try { mon.Dispose(); } catch { }
+                    _monitor = null;
+                    _lastMonitorTry = DateTime.UtcNow.AddSeconds(-4);
+                });
                 _monitor.Start();
                 _monitorKey = key;
             }
@@ -1128,6 +1165,15 @@ public partial class MainWindow : Window
             if (c is T t) yield return t;
             foreach (var d in FindAll<T>(c)) yield return d;
         }
+    }
+
+    static readonly bool SelfTesting = Environment.GetEnvironmentVariable("SAVOR_SELFTEST_TRAY") == "1";
+
+    /// <summary>CI only: notes what happened, for the automated tray test.</summary>
+    static void SelfLog(string line)
+    {
+        if (!SelfTesting) return;
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"{DateTime.Now:HH:mm:ss} {line}\n"); } catch { }
     }
 
     static void LogError(string where, Exception ex)
@@ -1664,6 +1710,7 @@ public partial class MainWindow : Window
         if (_exiting) return;
         _exiting = true;
         _uiTimer.Stop();
+        SetRenderHook(false);
         _settings.Save();
         _preview.Stop();
         try { _monitor?.Dispose(); } catch { }

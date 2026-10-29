@@ -87,6 +87,7 @@ public sealed class PreviewSource : IDisposable
         var p = new Process { StartInfo = Ffmpeg.StartInfo(a) };
         p.ErrorDataReceived += (_, _) => { };
         try { p.Start(); } catch { p.Dispose(); return; }
+        ChildProcesses.Track(p);
         p.BeginErrorReadLine();
         _proc = p;
         StartedUtc = DateTime.UtcNow;

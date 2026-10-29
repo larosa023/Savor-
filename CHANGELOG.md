@@ -1,5 +1,11 @@
 # What's new in Savor
 
+## 0.6.5 · Oct 29, 2026
+- Fixed hotkeys sometimes stopping working while Savor is in the tray. Hotkeys now run on their own and re-attach automatically.
+- Capture now reconnects by itself after a game changes resolution, a lock screen or UAC prompt, sleep, or switching audio devices (like plugging in headphones). The replay buffer and recordings carry on instead of turning off.
+- If Savor is ever force-closed, its capture engine now always closes with it.
+- Lighter when idle: Savor no longer redraws its window while it's hidden, and checks in far less often from the tray.
+
 ## 0.6.4 · Oct 29, 2026
 - Slightly smaller recording dot on the taskbar and tray icons.
 

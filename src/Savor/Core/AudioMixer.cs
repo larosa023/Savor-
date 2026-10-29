@@ -21,6 +21,24 @@ public sealed class AudioMixer : IDisposable
     static readonly Guid FloatSubtype = new("00000003-0000-0010-8000-00aa00389b71");
 
     readonly MMDeviceEnumerator _enumerator = new();
+    readonly string _renderId;
+    DeviceWatcher? _watcher;
+    Timer? _stallTimer;
+    long _lastLoopTicks;
+    volatile bool _stopping;
+    int _lostRaised;
+
+    /// <summary>
+    /// The output device went away, changed, or stopped delivering audio (headphones unplugged, default
+    /// device switched, driver reset). The owner should rebuild the mixer. Raised at most once, on any thread.
+    /// </summary>
+    public event Action? DeviceLost;
+
+    void RaiseDeviceLost()
+    {
+        if (_stopping || Interlocked.Exchange(ref _lostRaised, 1) == 1) return;
+        DeviceLost?.Invoke();
+    }
     readonly WasapiLoopbackCapture _loopback;
     readonly WasapiOut? _keepAlive;
     readonly int _loopChannels, _loopBits;
@@ -55,11 +73,11 @@ public sealed class AudioMixer : IDisposable
         {
             if (_trackNames != null) return _trackNames;
             var names = new List<string> { "Mix" };
-            int sources = (DesktopEnabled ? 1 : 0) + (_mic != null ? 1 : 0) + _apps.Count;
+            int sources = (DesktopEnabled ? 1 : 0) + (_micConfigured ? 1 : 0) + _apps.Count;
             if (SeparateTracks && (sources >= 2 || _apps.Count > 0))
             {
                 if (DesktopEnabled) { _deskTrack = names.Count; names.Add("Desktop audio"); }
-                if (_mic != null) { _micTrack = names.Count; names.Add("Microphone"); }
+                if (_micConfigured) { _micTrack = names.Count; names.Add("Microphone"); }
                 foreach (var a in _apps) { a.TrackIndex = names.Count; names.Add(a.Name); }
             }
             return _trackNames = names.ToArray();
@@ -107,15 +125,22 @@ public sealed class AudioMixer : IDisposable
 
     public event Action<byte[], int>? DataAvailable;
 
+    readonly bool _micConfigured;
+
     public AudioMixer(bool desktopEnabled, double desktopVolume, string? micId, double micVolume,
                       IEnumerable<AppAudioSetting>? apps = null)
     {
+        // The track layout follows the settings, not whether a device opened right now, so a capture that
+        // reconnects after a device change always has the same tracks (and its pieces join cleanly).
+        _micConfigured = !string.IsNullOrEmpty(micId);
         DesktopEnabled = desktopEnabled;
         DesktopVolume = (float)desktopVolume;
         MicVolume = (float)micVolume;
 
         var render = _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        _renderId = render.ID;
         _loopback = new WasapiLoopbackCapture(render);
+        _loopback.RecordingStopped += (_, _) => RaiseDeviceLost();
         var lf = _loopback.WaveFormat;
         SampleRate = lf.SampleRate;
         _loopChannels = lf.Channels;
@@ -184,11 +209,13 @@ public sealed class AudioMixer : IDisposable
                 if (a.Live) continue;
                 try { a.Capture?.Dispose(); } catch { }
                 a.Capture = null;
+                if (_stopping) return;
                 var pid = ProcessAudioCapture.FindRootProcess(a.Exe);
                 if (pid == null) continue;
                 try
                 {
                     var cap = ProcessAudioCapture.StartAsync(pid.Value, SampleRate).GetAwaiter().GetResult();
+                    if (_stopping) { cap.Dispose(); return; } // stopped while we were attaching
                     var ring = a.Ring;
                     cap.DataAvailable += (buf, n) =>
                     {
@@ -207,14 +234,35 @@ public sealed class AudioMixer : IDisposable
     public void Start()
     {
         _keepAlive?.Play();
+        _lastLoopTicks = Environment.TickCount64;
         _loopback.StartRecording();
         _mic?.StartRecording();
+        // notice device switches and stalls (the silent keep-alive stream means loopback normally never goes quiet)
+        try
+        {
+            _watcher = new DeviceWatcher(_renderId, RaiseDeviceLost);
+            _enumerator.RegisterEndpointNotificationCallback(_watcher);
+        }
+        catch { _watcher = null; }
+        // only meaningful when the silent keep-alive stream is running; otherwise quiet periods are normal
+        if (_keepAlive != null) _stallTimer = new Timer(_ =>
+        {
+            if (Environment.TickCount64 - Interlocked.Read(ref _lastLoopTicks) > 3000) RaiseDeviceLost();
+        }, null, 3000, 1000);
         if (_apps.Count > 0)
             _appWatcher = new Timer(_ => AttachApps(), null, 0, 3000);
     }
 
     public void Stop()
     {
+        _stopping = true;
+        _stallTimer?.Dispose();
+        _stallTimer = null;
+        if (_watcher != null)
+        {
+            try { _enumerator.UnregisterEndpointNotificationCallback(_watcher); } catch { }
+            _watcher = null;
+        }
         try { _loopback.StopRecording(); } catch { }
         try { _mic?.StopRecording(); } catch { }
         try { _keepAlive?.Stop(); } catch { }
@@ -241,6 +289,7 @@ public sealed class AudioMixer : IDisposable
 
     void OnLoopback(object? sender, WaveInEventArgs e)
     {
+        Interlocked.Exchange(ref _lastLoopTicks, Environment.TickCount64);
         if (e.BytesRecorded == 0) return;
         int frames = ToStereo(e.Buffer, e.BytesRecorded, _loopChannels, _loopBits, _loopFloat, ref _desk);
         int n = frames * 2;
@@ -301,6 +350,31 @@ public sealed class AudioMixer : IDisposable
         if (_outBytes.Length < bytes) _outBytes = new byte[bytes];
         Buffer.BlockCopy(_out, 0, _outBytes, 0, bytes);
         DataAvailable?.Invoke(_outBytes, bytes);
+    }
+
+    /// <summary>Default-output-device changes (from Windows, on a COM thread).</summary>
+    [System.Runtime.InteropServices.ComVisible(true)]
+    sealed class DeviceWatcher : NAudio.CoreAudioApi.Interfaces.IMMNotificationClient
+    {
+        readonly string _deviceId;
+        readonly Action _lost;
+        public DeviceWatcher(string deviceId, Action lost) { _deviceId = deviceId; _lost = lost; }
+
+        public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+        {
+            if (flow == DataFlow.Render && role == Role.Multimedia && !string.Equals(defaultDeviceId, _deviceId, StringComparison.OrdinalIgnoreCase))
+                _lost();
+        }
+        public void OnDeviceStateChanged(string deviceId, DeviceState newState)
+        {
+            if (string.Equals(deviceId, _deviceId, StringComparison.OrdinalIgnoreCase) && newState != DeviceState.Active) _lost();
+        }
+        public void OnDeviceRemoved(string deviceId)
+        {
+            if (string.Equals(deviceId, _deviceId, StringComparison.OrdinalIgnoreCase)) _lost();
+        }
+        public void OnDeviceAdded(string pwstrDeviceId) { }
+        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key) { }
     }
 
     static float Clip(float s) => s > 1f ? 1f : (s < -1f ? -1f : s);

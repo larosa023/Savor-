@@ -123,6 +123,7 @@ public static class ClipExporter
                 progress?.Report(Math.Clamp(us / 1000.0 / duration.TotalMilliseconds, 0, 1));
         };
         p.Start();
+        ChildProcesses.Track(p);
         try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
         p.BeginErrorReadLine();
         p.BeginOutputReadLine();

@@ -122,6 +122,7 @@ public static class Ffmpeg
         p.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (err) err.AppendLine(e.Data); };
         p.OutputDataReceived += (_, _) => { };
         p.Start();
+        ChildProcesses.Track(p);
         p.BeginErrorReadLine();
         p.BeginOutputReadLine();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

@@ -62,6 +62,8 @@ public partial class ClipEditor : UserControl
         InitializeComponent();
         _ready = true;
         PreviewKeyDown += OnKey;
+        // per-frame updates only while the editor is actually on screen (e.g. not while Savor is in the tray)
+        IsVisibleChanged += (_, _) => SetFrameHook(IsVisible && _path != null);
     }
 
     // ===================== open / close =====================
@@ -103,14 +105,14 @@ public partial class ClipEditor : UserControl
         Player.Pause(); // opens the file and shows the first frame
         _clockBase = TimeSpan.Zero;
         _clock.Reset();
-        if (!_renderHooked) { CompositionTarget.Rendering += OnFrame; _renderHooked = true; }
+        SetFrameHook(IsVisible);
         Focus();
     }
 
     /// <summary>Stops playback and releases the decoder and the file handle.</summary>
     public void Release()
     {
-        if (_renderHooked) { CompositionTarget.Rendering -= OnFrame; _renderHooked = false; }
+        SetFrameHook(false);
         _clock.Reset();
         _pendingSeek = null;
         _strip?.Dispose();
@@ -299,6 +301,14 @@ public partial class ClipEditor : UserControl
     {
         if (!ReferenceEquals(ScrubFrame.Source, img)) ScrubFrame.Source = img;
         ScrubFrame.Visibility = Visibility.Visible;
+    }
+
+    void SetFrameHook(bool on)
+    {
+        if (on == _renderHooked) return;
+        if (on) CompositionTarget.Rendering += OnFrame;
+        else CompositionTarget.Rendering -= OnFrame;
+        _renderHooked = on;
     }
 
     /// <summary>Where playback is right now (smooth, not limited to the player's update rate).</summary>
