@@ -100,6 +100,8 @@ public sealed class EncoderCache
 {
     public string FfmpegStamp { get; set; } = "";
     public List<string> Working { get; set; } = new();
+    /// <summary>Why GPU encoders failed (vendor → ffmpeg error), shown in Settings.</summary>
+    public Dictionary<string, string> Failures { get; set; } = new();
 }
 
 public sealed class AppSettings

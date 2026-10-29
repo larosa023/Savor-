@@ -646,7 +646,7 @@
                                     </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="Encoder" Style="{StaticResource RowTitle}"/>
-                                        <TextBlock x:Name="EncoderDesc" Text="GPU encoders keep games running smoothly." Style="{StaticResource RowDesc}"/>
+                                        <TextBlock x:Name="EncoderDesc" Text="GPU encoders keep games running smoothly." Style="{StaticResource RowDesc}" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>

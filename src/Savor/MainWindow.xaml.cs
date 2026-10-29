@@ -159,6 +159,8 @@ public partial class MainWindow : Window
             _ = Dispatcher.BeginInvoke(async () => { await Task.Delay(30000); WhatsNew_Click(this, new RoutedEventArgs()); });
 
         await DetectEncodersAsync(force: false);
+        SelfLog("encoder: " + EncoderDescription().Replace("\n", " | "));
+        foreach (var f in _encoderFailures) SelfLog($"probe failure [{f.Key}]: {f.Value.Replace('\n', ' ')}");
         _ = EnforceStorageAsync();
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
         if (_editOnStart != null && Environment.GetEnvironmentVariable("SAVOR_SELFTEST") == "1")
@@ -175,12 +177,16 @@ public partial class MainWindow : Window
         }
     }
 
+    Dictionary<string, string> _encoderFailures = new();
+
     async Task DetectEncodersAsync(bool force)
     {
-        var stamp = Ffmpeg.Stamp();
+        // re-detect when FFmpeg or a graphics driver changes (e.g. after updating drivers to fix GPU encoding)
+        var stamp = Ffmpeg.Stamp() + "|" + GpuInfo.Stamp();
         if (!force && _settings.EncoderCache is { } cache && cache.FfmpegStamp == stamp && cache.Working.Count > 0)
         {
             _encoders = Ffmpeg.FromCache(cache);
+            _encoderFailures = cache.Failures ?? new();
         }
         else
         {
@@ -189,7 +195,8 @@ public partial class MainWindow : Window
             RecordButton.IsEnabled = false;
             var progress = new Progress<string>(s => CaptureInfo.Text = s);
             _encoders = await Task.Run(() => Ffmpeg.ProbeAsync(progress));
-            _settings.EncoderCache = new EncoderCache { FfmpegStamp = stamp, Working = _encoders.Select(e => e.Key).ToList() };
+            lock (Ffmpeg.LastProbeFailures) _encoderFailures = new(Ffmpeg.LastProbeFailures);
+            _settings.EncoderCache = new EncoderCache { FfmpegStamp = stamp, Working = _encoders.Select(e => e.Key).ToList(), Failures = _encoderFailures };
             _settings.Save();
             BufferToggle.IsEnabled = true;
             RecordButton.IsEnabled = true;
@@ -1502,11 +1509,29 @@ public partial class MainWindow : Window
             EncoderCombo.Items.Add(new ComboBoxItem { Content = auto != null ? $"Auto ({auto.Name})" : "Auto", Tag = "auto" });
             foreach (var e in _encoders) EncoderCombo.Items.Add(new ComboBoxItem { Content = e.Name, Tag = e.Def.Id });
             if (!SelectByTag(EncoderCombo, _settings.EncoderId)) SelectByTag(EncoderCombo, "auto");
-            EncoderDesc.Text = _encoders.Count == 0
-                ? "No encoders detected yet."
-                : $"{_encoders.Count} working encoder{(_encoders.Count == 1 ? "" : "s")} found. GPU encoders keep games running smoothly.";
+            EncoderDesc.Text = EncoderDescription();
         }
         finally { _loadingUi = wasLoading; }
+    }
+
+    string EncoderDescription()
+    {
+        if (_encoders.Count == 0) return "No encoders detected yet.";
+        string found = $"{_encoders.Count} working encoder{(_encoders.Count == 1 ? "" : "s")} found.";
+        if (_encoders.Any(e => e.Def.Vendor != "cpu")) return found + " GPU encoders keep games running smoothly.";
+
+        // CPU only: say why, so it can be fixed (usually an outdated graphics driver)
+        var gpus = GpuInfo.Adapters();
+        var reasons = _encoderFailures
+            .Select(f => Ffmpeg.ExplainFailure(f.Key, f.Value, gpus))
+            .Where(r => r != null).ToList();
+        string gpuText = string.Join(", ", gpus.Select(g => $"{g.Name} (driver {g.FriendlyVersion})"));
+        if (reasons.Count > 0)
+            return "Only the CPU encoder works, which is heavier on games. " + string.Join(" ", reasons) +
+                   " Then press ↻ to re-detect." + (gpuText.Length > 0 ? $"\nDetected: {gpuText}" : "");
+        return gpus.Count == 0
+            ? "Only the CPU encoder works: no NVIDIA, AMD or Intel graphics found."
+            : $"Only the CPU encoder works, which is heavier on games. Updating your graphics driver may enable GPU encoding.\nDetected: {gpuText}";
     }
 
     static bool SelectByTag(ComboBox combo, object tag)

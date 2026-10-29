@@ -97,7 +97,7 @@ public static class ClipExporter
             filters.Add(enc.Vendor == "cpu" ? "format=yuv420p" : "format=nv12");
             a.AddRange(new[] { "-vf", string.Join(",", filters) });
             var q = quality < QualityPreset.High ? QualityPreset.High : quality;
-            a.AddRange(Ffmpeg.EncoderArgs(enc, q, 60));
+            a.AddRange(Ffmpeg.EncoderArgs(enc, q, 60, live: false));
             if (r.Audio != AudioExport.None) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k" });
         }
         if (r.Audio == AudioExport.None) a.Add("-an");

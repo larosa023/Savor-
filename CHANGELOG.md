@@ -1,5 +1,10 @@
 # What's new in Savor
 
+## 0.6.7 · Oct 29, 2026
+- Much lower memory when recording with the CPU encoder (x264): about 140 MB instead of several GB on high-core CPUs at 1440p.
+- If no GPU encoder works, Settings → Encoder now says why (usually an outdated graphics driver) and which graphics card was found.
+- Encoders are re-detected automatically after a graphics driver update.
+
 ## 0.6.6 · Oct 29, 2026
 - Volume slider for the save sound (Settings → General). It plays a preview as you adjust it.
 

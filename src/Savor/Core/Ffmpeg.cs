@@ -167,7 +167,8 @@ public static class Ffmpeg
         };
     }
 
-    public static List<string> EncoderArgs(EncoderDef e, QualityPreset q, int fps)
+    /// <param name="live">true for screen capture: keep the CPU encoder's memory small and steady.</param>
+    public static List<string> EncoderArgs(EncoderDef e, QualityPreset q, int fps, bool live = true)
     {
         int idx = (int)q; // Low, Medium, High, Ultra
         var a = new List<string> { "-c:v", e.FfmpegName };
@@ -190,6 +191,11 @@ public static class Ffmpeg
             default:
                 int crf = new[] { 28, 24, 21, 18 }[idx];
                 a.AddRange(new[] { "-preset", "veryfast", "-crf", crf.ToString(), "-pix_fmt", "yuv420p" });
+                // x264 by default runs ~1.5 frame threads per CPU core, each holding several full frames:
+                // at 1440p on a 16-core CPU that is 1.5–4 GB of RAM. Live capture uses sliced threads with no
+                // lookahead instead (~140 MB at 1440p, measured), at a small cost in file size.
+                if (live)
+                    a.AddRange(new[] { "-tune", "zerolatency", "-threads", Math.Clamp(Environment.ProcessorCount, 2, 16).ToString() });
                 break;
         }
         // Keyframe every 2 seconds so the replay buffer can cut cleanly on segment boundaries.
@@ -202,10 +208,14 @@ public static class Ffmpeg
             ? new[] { CapturePipeline.DdaDownload }
             : new[] { CapturePipeline.DdaDirect, CapturePipeline.DdaDownload };
 
+    /// <summary>Why GPU encoders failed in the last probe (vendor → message), for the settings page.</summary>
+    public static Dictionary<string, string> LastProbeFailures { get; } = new();
+
     /// <summary>Tries each encoder with a few real captured frames to see what this machine supports.</summary>
     public static async Task<List<EncoderChoice>> ProbeAsync(IProgress<string>? progress = null)
     {
         var working = new List<EncoderChoice>();
+        var errors = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
         var gate = new SemaphoreSlim(2); // consumer GPUs limit concurrent encode sessions
         var tasks = Encoders.Select(async def =>
         {
@@ -216,8 +226,9 @@ public static class Ffmpeg
                 {
                     var choice = new EncoderChoice(def, pipe);
                     progress?.Report($"Testing {def.Name}…");
-                    if (await TestAsync(choice))
-                        return choice;
+                    var (ok, err) = await TestAsync(choice);
+                    if (ok) return choice;
+                    if (def.Codec == "h264") errors[def.Vendor] = err;
                 }
                 return null;
             }
@@ -231,14 +242,21 @@ public static class Ffmpeg
         {
             // Desktop Duplication unavailable (e.g. remote desktop) -> GDI fallback.
             var gdi = new EncoderChoice(Encoders.First(e => e.Vendor == "cpu"), CapturePipeline.Gdi);
-            if (await TestAsync(gdi)) working.Add(gdi);
+            if ((await TestAsync(gdi)).ok) working.Add(gdi);
+        }
+
+        lock (LastProbeFailures)
+        {
+            LastProbeFailures.Clear();
+            foreach (var (vendor, err) in errors)
+                if (!working.Any(w => w.Def.Vendor == vendor)) LastProbeFailures[vendor] = err;
         }
 
         // keep definition order
         return working.OrderBy(w => Array.IndexOf(Encoders, w.Def)).ToList();
     }
 
-    static async Task<bool> TestAsync(EncoderChoice c)
+    static async Task<(bool ok, string err)> TestAsync(EncoderChoice c)
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin" };
         if (c.Pipeline == CapturePipeline.Gdi)
@@ -252,10 +270,45 @@ public static class Ffmpeg
         args.AddRange(new[] { "-f", "null", "-" });
         try
         {
-            var (code, _) = await RunAsync(args, TimeSpan.FromSeconds(15));
-            return code == 0;
+            var (code, err) = await RunAsync(args, TimeSpan.FromSeconds(15));
+            return (code == 0, code == -1 ? "timed out" : err.Trim());
         }
-        catch { return false; }
+        catch (Exception ex) { return (false, ex.Message); }
+    }
+
+    /// <summary>
+    /// Plain-language reason a GPU encoder couldn't be used, or null when the GPU simply isn't there.
+    /// </summary>
+    public static string? ExplainFailure(string vendor, string err, IReadOnlyList<GpuInfo.Adapter> gpus)
+    {
+        bool has = gpus.Any(g => g.Vendor == vendor);
+        string e = err.ToLowerInvariant();
+        switch (vendor)
+        {
+            case "nvidia":
+                if (!has) return null;
+                if (e.Contains("required nvenc api version") || e.Contains("driver does not support"))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(err, @"[Mm]inimum required Nvidia driver for nvenc is ([\d.]+)");
+                    return $"NVIDIA: your graphics driver is too old for GPU recording. Update it{(m.Success ? $" (to {m.Groups[1].Value} or newer)" : "")} from nvidia.com or the NVIDIA app.";
+                }
+                if (e.Contains("nvcuda") || e.Contains("cannot load"))
+                    return "NVIDIA: the graphics driver isn't fully installed. Reinstall it from nvidia.com or the NVIDIA app.";
+                if (e.Contains("no capable devices") || e.Contains("unsupported device"))
+                    return "NVIDIA: this graphics card doesn't support NVENC hardware encoding.";
+                if (e.Contains("incompatible client key") || e.Contains("out of memory") || e.Contains("too many"))
+                    return "NVIDIA: the encoder is busy (another app may be using all encode sessions). Close it, then re-detect.";
+                return "NVIDIA: GPU encoding couldn't start. Updating your graphics driver usually fixes this.";
+            case "amd":
+                if (!has) return null;
+                if (e.Contains("amfrt64") || e.Contains("failed to open") || e.Contains("version"))
+                    return "AMD: your graphics driver is missing or too old for GPU recording. Update it from amd.com (Adrenalin).";
+                return "AMD: GPU encoding couldn't start. Updating your graphics driver usually fixes this.";
+            case "intel":
+                if (!has || gpus.Any(g => g.Vendor is "nvidia" or "amd")) return null; // QSV only matters without a dedicated GPU
+                return "Intel: Quick Sync couldn't start. Updating your Intel graphics driver usually fixes this.";
+        }
+        return null;
     }
 
     public static List<EncoderChoice> FromCache(EncoderCache cache)
