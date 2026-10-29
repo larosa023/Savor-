@@ -192,10 +192,12 @@ public static class Ffmpeg
                 int crf = new[] { 28, 24, 21, 18 }[idx];
                 a.AddRange(new[] { "-preset", "veryfast", "-crf", crf.ToString(), "-pix_fmt", "yuv420p" });
                 // x264 by default runs ~1.5 frame threads per CPU core, each holding several full frames:
-                // at 1440p on a 16-core CPU that is 1.5–4 GB of RAM. Live capture uses sliced threads with no
-                // lookahead instead (~140 MB at 1440p, measured), at a small cost in file size.
+                // at 1440p that is ~1 GB with 24 threads and ~1.75 GB with 48 (measured), before any queueing.
+                // Live capture uses sliced threads instead: ~250 MB at 1440p whatever the core count, and the
+                // same file size (a short lookahead is kept; -tune zerolatency would nearly double file size).
                 if (live)
-                    a.AddRange(new[] { "-tune", "zerolatency", "-threads", Math.Clamp(Environment.ProcessorCount, 2, 16).ToString() });
+                    a.AddRange(new[] { "-threads", Math.Clamp(Environment.ProcessorCount, 2, 16).ToString(),
+                                       "-x264-params", "sliced-threads=1:rc-lookahead=10:sync-lookahead=0" });
                 break;
         }
         // Keyframe every 2 seconds so the replay buffer can cut cleanly on segment boundaries.
