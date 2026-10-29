@@ -490,7 +490,7 @@ public partial class ClipEditor : UserControl
         OutText.Text = Fmt(_out);
         LenText.Text = Fmt(_out - _in);
         bool trimmed = _in > TimeSpan.Zero || _out < _duration - TimeSpan.FromMilliseconds(50);
-        ExportText.Text = TargetBytes > 0 ? "Export for Discord" : trimmed || _cropMode != "none" ? "Export" : "Export copy";
+        ExportText.Text = trimmed || _cropMode != "none" ? "Export" : "Export copy";
     }
 
     const double Pad = 18; // room for the handles at both ends
@@ -754,7 +754,7 @@ public partial class ClipEditor : UserControl
             }
         }
         CropLayer.Visibility = mode == "none" ? Visibility.Collapsed : Visibility.Visible;
-        FastToggle.IsEnabled = mode == "none" && TargetBytes == 0;
+        FastToggle.IsEnabled = mode == "none";
         if (mode != "none") FastToggle.IsChecked = false;
         if (mode != "none") { Pause(); BigPlay.Visibility = Visibility.Collapsed; }
         LayoutCrop();
@@ -923,17 +923,6 @@ public partial class ClipEditor : UserControl
 
     void Fast_Click(object sender, RoutedEventArgs e) { }
 
-    long TargetBytes => SizeCombo?.SelectedItem is ComboBoxItem { Tag: string t } && long.TryParse(t, out var b) ? b : 0;
-
-    void SizeCombo_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_ready) return;
-        bool fit = TargetBytes > 0;
-        FastToggle.IsEnabled = !fit && _cropMode == "none";
-        if (fit) { FastToggle.IsChecked = false; SaveModeCombo.SelectedIndex = 0; }
-        SaveModeCombo.IsEnabled = !fit; // size-fitted copies are always saved as a new file
-        UpdateTrimText();
-    }
 
     async void Export_Click(object sender, RoutedEventArgs e)
     {
@@ -964,11 +953,7 @@ public partial class ClipEditor : UserControl
         }
 
         var source = _path;
-        long target = TargetBytes;
-        if (target > 0) replace = false;
-        var output = replace ? source
-            : target > 0 ? ClipExporter.NextOutputPath(source, "Discord", ".mp4")
-            : ClipExporter.NextOutputPath(source);
+        var output = replace ? source : ClipExporter.NextOutputPath(source);
         var req = new ExportRequest
         {
             Input = source,
@@ -978,9 +963,7 @@ public partial class ClipEditor : UserControl
             Crop = crop,
             Audio = audio == AudioExport.Selected && _listen.Count == 0 ? AudioExport.None : audio,
             Tracks = _listen.ToArray(),
-            Fast = FastToggle.IsChecked == true && crop == null && target == 0,
-            TargetBytes = target,
-            SourceHeight = crop?.Height ?? _vh,
+            Fast = FastToggle.IsChecked == true && crop == null,
         };
 
         Pause();
@@ -1000,19 +983,7 @@ public partial class ClipEditor : UserControl
         try
         {
             await Task.Run(() => ClipExporter.ExportAsync(req, _encoder?.Invoke(), _settings.Quality, progress, _exportCts.Token));
-            if (target > 0)
-            {
-                // ready to paste straight into Discord
-                try
-                {
-                    var files = new System.Collections.Specialized.StringCollection { output };
-                    Clipboard.SetFileDropList(files);
-                }
-                catch { }
-                double mb = new FileInfo(output).Length / 1_000_000.0;
-                ShowStatus($"Saved “{Path.GetFileName(output)}” ({mb:0.0} MB) and copied it — paste it into Discord.");
-            }
-            else ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
+            ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
             Exported?.Invoke(output);
         }
         catch (OperationCanceledException) { ShowStatus("Export cancelled."); }

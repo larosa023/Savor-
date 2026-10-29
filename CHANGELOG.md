@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.6.2 · Oct 29, 2026
+- Removed the Discord-size export option from the editor.
+
 ## 0.6.1 · Oct 29, 2026
 - "What's new" only marks updates you haven't seen yet.
 

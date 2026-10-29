@@ -1107,23 +1107,7 @@ public partial class MainWindow : Window
             Directory.Delete(dir, true);
         }
         catch (Exception ex) { LogError("Storage self-test", ex); }
-        // Discord-size export: fit the 12 s test clip into 2 MB
-        try
-        {
-            var src = _editOnStart!;
-            var outPath = Path.Combine(Path.GetDirectoryName(src)!, "fit-test.mp4");
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            await ClipExporter.ExportAsync(new ExportRequest
-            {
-                Input = src, Output = outPath, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(12),
-                TargetBytes = 2_000_000, SourceHeight = 1080, Audio = AudioExport.MixOnly,
-            }, _engine.Encoder?.Def, _settings.Quality, null, CancellationToken.None);
-            long size = new FileInfo(outPath).Length;
-            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
-                $"fit export: target 2.00 MB -> {size / 1e6:0.00} MB in {sw.Elapsed.TotalSeconds:0.0}s\n");
-            File.Delete(outPath);
-        }
-        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "fit export FAILED: " + ex.Message + "\n"); }
+
         try
         {
             var result = await _editor.SelfTestScrubAsync();

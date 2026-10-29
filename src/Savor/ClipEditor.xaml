@@ -297,13 +297,6 @@
                 <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
                     <StackPanel>
                         <TextBlock Text="Export" Style="{StaticResource Eyebrow}" Margin="0,0,0,10"/>
-                        <TextBlock Text="Size" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
-                        <ComboBox x:Name="SizeCombo" MinWidth="0" Margin="0,0,0,10" SelectionChanged="SizeCombo_Changed">
-                            <ComboBoxItem Content="Original quality" Tag="0" IsSelected="True"/>
-                            <ComboBoxItem Content="Fit 10 MB · Discord" Tag="10000000"/>
-                            <ComboBoxItem Content="Fit 50 MB · Discord Nitro Basic" Tag="50000000"/>
-                            <ComboBoxItem Content="Fit 500 MB · Discord Nitro" Tag="500000000"/>
-                        </ComboBox>
                         <ComboBox x:Name="SaveModeCombo" MinWidth="0">
                             <ComboBoxItem Content="Save as a new file" Tag="new" IsSelected="True"/>
                             <ComboBoxItem Content="Replace the original" Tag="replace"/>
