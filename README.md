@@ -20,7 +20,10 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 - **Global hotkeys** that work while you're in a game, and a tray icon so Savor stays out of the way.
 - **Captures library** with thumbnails — right-click to copy the file (paste straight into Discord), show in folder, or delete.
 - **Built-in viewer & editor** — click any capture to play it inside Savor, trim it (drag handles or I / O), crop it (free, 16:9, 9:16 for Shorts/TikTok, 1:1, 4:3), choose which audio tracks to keep, and export with your GPU encoder. Fast export does lossless trims instantly. Shortcuts: Space play/pause, ← / → step, Shift + ← / → 5 s, Esc back.
-- Quiet notifications that never steal focus from your game.
+- **Discord-size export** — fit a clip into 10 / 50 / 500 MB in one click; it's copied, ready to paste into Discord.
+- **Storage limit & low-disk protection** — keep captures under a size you choose; Savor warns when the drive is nearly full and stops a recording safely before it fills up.
+- **What's new** — the clock icon in the top bar lists every update.
+- Quiet notifications that never steal focus from your game, plus an optional save chime.
 - MP4 or MKV output, launch-at-startup, monitor picker, 30–240 fps.
 
 ## Download

@@ -1746,7 +1746,7 @@ public partial class MainWindow : Window
             if (n.Date.Length > 0)
                 head.Children.Add(new TextBlock { Text = "  " + n.Date, Foreground = (Brush)FindResource("FaintBrush"), FontSize = 11.5,
                                                   VerticalAlignment = VerticalAlignment.Center });
-            string? chip = ver == current ? "INSTALLED" : ver > current ? "AVAILABLE" : (seen == null || ver > Normalize(seen)) ? "NEW" : null;
+            string? chip = ver == current ? "INSTALLED" : ver > current ? "AVAILABLE" : (seen != null && ver > Normalize(seen)) ? "NEW" : null;
             if (chip != null)
             {
                 head.Children.Add(new Border
@@ -1786,6 +1786,7 @@ public partial class MainWindow : Window
 
     void CloseWhatsNew()
     {
+        WhatsNewList.Children.Clear(); // rebuilt from the embedded notes next time; nothing kept in memory
         WhatsNewPanel.Visibility = Visibility.Collapsed;
         WhatsNewScrim.Visibility = Visibility.Collapsed;
     }

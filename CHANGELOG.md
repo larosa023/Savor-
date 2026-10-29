@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.6.1 · Oct 29, 2026
+- "What's new" only marks updates you haven't seen yet.
+
 ## 0.6.0 · Oct 29, 2026
 - Storage limit: keep your captures under a size you choose (Settings → Output). The oldest are removed automatically.
 - Low disk protection: Savor warns you when your drive is getting full, and stops a recording safely (keeping what was recorded) before it fills up.
