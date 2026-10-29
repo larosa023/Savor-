@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -120,6 +121,7 @@ public partial class MainWindow : Window
         _tray.ExitRequested += () => _ = ExitAsync();
 
         System.Threading.Tasks.Task.Run(ClipAudio.CleanTemp);
+        RefreshWhatsNewDot();
         _hotkeys = new HotkeyManager(this);
         RegisterHotkeys();
 
@@ -150,8 +152,11 @@ public partial class MainWindow : Window
         _ = CheckForUpdatesAsync(userInitiated: false);
 
         if (Environment.GetEnvironmentVariable("SAVOR_SELFTEST_AUDIO") == "1") _ = SelfTestAppAudioAsync();
+        if (Environment.GetEnvironmentVariable("SAVOR_SELFTEST_AUDIO") == "1")
+            _ = Dispatcher.BeginInvoke(async () => { await Task.Delay(30000); WhatsNew_Click(this, new RoutedEventArgs()); });
 
         await DetectEncodersAsync(force: false);
+        _ = EnforceStorageAsync();
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
         if (_editOnStart != null && Environment.GetEnvironmentVariable("SAVOR_SELFTEST") == "1")
             _ = SelfTestDropdownsAsync();
@@ -247,6 +252,12 @@ public partial class MainWindow : Window
             }
             else
             {
+                long free = Math.Min(Storage.FreeBytes(_settings.OutputFolder), Storage.FreeBytes(_engine.BufferDir));
+                if (free < Storage.CriticalSpaceBytes)
+                {
+                    ShowError($"Not enough disk space to record ({Storage.Gb(free)} left).");
+                    return;
+                }
                 await _engine.StartRecordingAsync();
                 HideError();
             }
@@ -261,9 +272,77 @@ public partial class MainWindow : Window
 
     void OnSaved(string path, bool recording)
     {
+        if (_settings.PlaySaveSound) Chime.Play();
         ReloadClips();
         if (_settings.ShowNotifications)
             Notify(recording ? "Recording saved" : "Clip saved", Path.GetFileName(path), onClick: () => Reveal(path));
+        _ = EnforceStorageAsync(path);
+    }
+
+    // ===================== storage =====================
+
+    async Task EnforceStorageAsync(string? keep = null)
+    {
+        if (_settings.StorageLimitGb <= 0) return;
+        var folder = _settings.OutputFolder;
+        int limit = _settings.StorageLimitGb;
+        var (deleted, freed) = await Task.Run(() => Storage.Enforce(folder, limit, keep));
+        if (deleted > 0)
+        {
+            ReloadClips();
+            Notify("Storage limit reached", $"Removed {deleted} old capture{(deleted == 1 ? "" : "s")} ({Storage.Gb(freed)}) to stay under {limit} GB.");
+        }
+    }
+
+    bool _lowSpaceWarned;
+    DateTime _lastSpaceCheck = DateTime.MinValue;
+
+    /// <summary>Every 10 s while capturing: warn when the disk is getting full, stop safely before it's full.</summary>
+    void CheckDiskSpace()
+    {
+        if (!_engine.IsRunning || (DateTime.UtcNow - _lastSpaceCheck).TotalSeconds < 10) return;
+        _lastSpaceCheck = DateTime.UtcNow;
+        long outFree = Storage.FreeBytes(_settings.OutputFolder);
+        long bufFree = Storage.FreeBytes(_engine.BufferDir);
+        long free = Math.Min(outFree, bufFree);
+
+        if (free < Storage.CriticalSpaceBytes)
+        {
+            if (_engine.Recording)
+            {
+                _ = ToggleRecordAsync(); // stops and saves what's recorded so far
+                ShowError($"Your drive is almost full ({Storage.Gb(free)} left), so the recording was stopped and saved. Free up space or set a storage limit in Settings → Output.");
+            }
+            else if (_engine.BufferActive)
+            {
+                _ = ToggleBufferAsync(forceOn: false);
+                ShowError($"Your drive is almost full ({Storage.Gb(free)} left), so the replay buffer was turned off.");
+            }
+            return;
+        }
+        if (free < Storage.LowSpaceWarnBytes && !_lowSpaceWarned)
+        {
+            _lowSpaceWarned = true;
+            Notify("Running low on disk space", $"{Storage.Gb(free)} left on the drive Savor saves to.", error: true);
+        }
+        else if (free > Storage.LowSpaceWarnBytes * 2) _lowSpaceWarned = false;
+    }
+
+    void Storage_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi) return;
+        _settings.StorageLimitGb = SelectedTag<int>(StorageCombo);
+        _settings.Save();
+        UpdateStorageDesc();
+        _ = EnforceStorageAsync();
+    }
+
+    void UpdateStorageDesc()
+    {
+        long used = Storage.UsedBytes(_settings.OutputFolder);
+        StorageDesc.Text = _settings.StorageLimitGb > 0
+            ? $"Using {Storage.Gb(used)} of {_settings.StorageLimitGb} GB. When it's over, the oldest captures are deleted permanently."
+            : $"Using {Storage.Gb(used)}. Set a limit to have the oldest captures deleted automatically.";
     }
 
     void Notify(string title, string body, bool error = false, Action? onClick = null) =>
@@ -337,6 +416,7 @@ public partial class MainWindow : Window
             PreviewRecText.Text = "REC " + shortT;
         }
 
+        CheckDiskSpace(); // runs even while hidden in the tray (throttled to every 10 s)
         bool shown = IsVisible && WindowState != WindowState.Minimized;
         UpdatePreview(shown);
         UpdateMonitor(shown);
@@ -1009,6 +1089,41 @@ public partial class MainWindow : Window
             catch (Exception ex) { LogError("Dropdown self-test", ex); }
         }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), _editor.AudioDiag() + "\n"); } catch { }
+        // storage limit: 3 × 1 MB captures, 2.5 MB limit → only the oldest should go
+        try
+        {
+            var dir = Path.Combine(AppSettings.LocalDataDir, "storage-test");
+            Directory.CreateDirectory(dir);
+            for (int i = 0; i < 3; i++)
+            {
+                var f = Path.Combine(dir, $"Clip test {i}.mp4");
+                File.WriteAllBytes(f, new byte[1 << 20]);
+                File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddMinutes(-10 + i));
+            }
+            File.WriteAllBytes(Path.Combine(dir, "not-savor.mp4"), new byte[1 << 20]);
+            var (del, _) = Storage.EnforceBytes(dir, (long)(2.5 * (1 << 20)));
+            var left = string.Join(", ", Directory.GetFiles(dir).Select(Path.GetFileName).OrderBy(x => x));
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"storage: deleted {del}, left [{left}]\n");
+            Directory.Delete(dir, true);
+        }
+        catch (Exception ex) { LogError("Storage self-test", ex); }
+        // Discord-size export: fit the 12 s test clip into 2 MB
+        try
+        {
+            var src = _editOnStart!;
+            var outPath = Path.Combine(Path.GetDirectoryName(src)!, "fit-test.mp4");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await ClipExporter.ExportAsync(new ExportRequest
+            {
+                Input = src, Output = outPath, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(12),
+                TargetBytes = 2_000_000, SourceHeight = 1080, Audio = AudioExport.MixOnly,
+            }, _engine.Encoder?.Def, _settings.Quality, null, CancellationToken.None);
+            long size = new FileInfo(outPath).Length;
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"fit export: target 2.00 MB -> {size / 1e6:0.00} MB in {sw.Elapsed.TotalSeconds:0.0}s\n");
+            File.Delete(outPath);
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "fit export FAILED: " + ex.Message + "\n"); }
         try
         {
             var result = await _editor.SelfTestScrubAsync();
@@ -1326,6 +1441,12 @@ public partial class MainWindow : Window
             StartupToggle.IsChecked = StartupManager.IsEnabled;
             TrayToggle.IsChecked = _settings.CloseToTray;
             NotifyToggle.IsChecked = _settings.ShowNotifications;
+            SoundToggle.IsChecked = _settings.PlaySaveSound;
+            StorageCombo.Items.Clear();
+            foreach (var (gb, label) in new[] { (0, "No limit"), (10, "10 GB"), (25, "25 GB"), (50, "50 GB"), (100, "100 GB"), (250, "250 GB"), (500, "500 GB") })
+                StorageCombo.Items.Add(new ComboBoxItem { Content = label, Tag = gb });
+            if (!SelectByTag(StorageCombo, _settings.StorageLimitGb)) SelectByTag(StorageCombo, 0);
+            UpdateStorageDesc();
 
             VersionText.Text = $"Savor {Updater.Current}";
             AboutText.Text = $"FFmpeg: {Ffmpeg.Path ?? "not found"}";
@@ -1412,6 +1533,9 @@ public partial class MainWindow : Window
         _settings.StartBufferOnLaunch = AutoBufferToggle.IsChecked == true;
         _settings.CloseToTray = TrayToggle.IsChecked == true;
         _settings.ShowNotifications = NotifyToggle.IsChecked == true;
+        bool soundWasOn = _settings.PlaySaveSound;
+        _settings.PlaySaveSound = SoundToggle.IsChecked == true;
+        if (_settings.PlaySaveSound && !soundWasOn) Chime.Play(); // let them hear it
         var container = SelectedTag<string>(ContainerCombo) ?? "mp4";
         _settings.Container = container;
         if (ReferenceEquals(sender, StartupToggle)) StartupManager.Set(StartupToggle.IsChecked == true);
@@ -1528,6 +1652,12 @@ public partial class MainWindow : Window
         ReloadClips();
     }
 
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && WhatsNewPanel.Visibility == Visibility.Visible) { CloseWhatsNew(); e.Handled = true; return; }
+        base.OnPreviewKeyDown(e);
+    }
+
     protected override void OnClosing(CancelEventArgs e)
     {
         if (!_exiting)
@@ -1561,6 +1691,107 @@ public partial class MainWindow : Window
         Close();
         Application.Current.Shutdown();
     }
+
+    // ===================== what's new =====================
+
+    sealed record ReleaseNote(Version Version, string Label, string Date, List<string> Items);
+
+    static List<ReleaseNote> LoadReleaseNotes()
+    {
+        var notes = new List<ReleaseNote>();
+        try
+        {
+            var res = Application.GetResourceStream(new Uri("pack://application:,,,/CHANGELOG.md"));
+            if (res == null) return notes;
+            using var reader = new StreamReader(res.Stream);
+            ReleaseNote? cur = null;
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                line = line.Trim();
+                if (line.StartsWith("## "))
+                {
+                    var head = line[3..].Split('·', 2);
+                    var label = head[0].Trim();
+                    if (!Version.TryParse(label, out var v)) { cur = null; continue; }
+                    cur = new ReleaseNote(v, label, head.Length > 1 ? head[1].Trim() : "", new List<string>());
+                    notes.Add(cur);
+                }
+                else if (line.StartsWith("- ") && cur != null) cur.Items.Add(line[2..].Trim());
+            }
+        }
+        catch { }
+        return notes;
+    }
+
+    static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build));
+
+    void RefreshWhatsNewDot()
+    {
+        Version.TryParse(_settings.LastSeenVersion, out var seen);
+        WhatsNewDot.Visibility = seen == null || Normalize(seen) < Updater.Current ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void WhatsNew_Click(object sender, RoutedEventArgs e)
+    {
+        if (WhatsNewPanel.Visibility == Visibility.Visible) { CloseWhatsNew(); return; }
+        Version.TryParse(_settings.LastSeenVersion, out var seen);
+        var current = Updater.Current;
+        WhatsNewList.Children.Clear();
+        foreach (var n in LoadReleaseNotes())
+        {
+            var ver = Normalize(n.Version);
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 6) };
+            head.Children.Add(new TextBlock { Text = n.Label, FontWeight = FontWeights.SemiBold, FontSize = 13.5 });
+            if (n.Date.Length > 0)
+                head.Children.Add(new TextBlock { Text = "  " + n.Date, Foreground = (Brush)FindResource("FaintBrush"), FontSize = 11.5,
+                                                  VerticalAlignment = VerticalAlignment.Center });
+            string? chip = ver == current ? "INSTALLED" : ver > current ? "AVAILABLE" : (seen == null || ver > Normalize(seen)) ? "NEW" : null;
+            if (chip != null)
+            {
+                head.Children.Add(new Border
+                {
+                    Style = (Style)FindResource("Chip"), Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(6, 1, 6, 1),
+                    Background = (Brush)FindResource(chip == "INSTALLED" ? "LiveSoftBrush" : "AccentSoftBrush"),
+                    Child = new TextBlock { Text = chip, FontSize = 9.5, FontWeight = FontWeights.Bold,
+                                            Foreground = (Brush)FindResource(chip == "INSTALLED" ? "LiveBrush" : "AccentBrush") }
+                });
+            }
+            WhatsNewList.Children.Add(head);
+            foreach (var item in n.Items)
+            {
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 5) };
+                var dot = new System.Windows.Shapes.Ellipse { Width = 4, Height = 4, Fill = (Brush)FindResource("MutedBrush"), Margin = new Thickness(2, 7, 10, 0),
+                                        VerticalAlignment = VerticalAlignment.Top };
+                DockPanel.SetDock(dot, Dock.Left);
+                row.Children.Add(dot);
+                row.Children.Add(new TextBlock { Text = item, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, LineHeight = 18,
+                                                 Foreground = (Brush)FindResource("TextBrush") });
+                WhatsNewList.Children.Add(row);
+            }
+        }
+        if (WhatsNewList.Children.Count == 0)
+            WhatsNewList.Children.Add(new TextBlock { Text = "No release notes in this build.", Foreground = (Brush)FindResource("MutedBrush") });
+        WhatsNewSub.Text = $"You're on Savor {current}";
+        WhatsNewScroll.ScrollToTop();
+        WhatsNewScrim.Visibility = Visibility.Visible;
+        WhatsNewPanel.Visibility = Visibility.Visible;
+        WhatsNewPanel.Opacity = 0;
+        WhatsNewPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(140)));
+
+        _settings.LastSeenVersion = current.ToString();
+        _settings.Save();
+        RefreshWhatsNewDot();
+    }
+
+    void CloseWhatsNew()
+    {
+        WhatsNewPanel.Visibility = Visibility.Collapsed;
+        WhatsNewScrim.Visibility = Visibility.Collapsed;
+    }
+
+    void WhatsNewClose_Click(object sender, RoutedEventArgs e) => CloseWhatsNew();
+    void WhatsNewScrim_Click(object sender, MouseButtonEventArgs e) => CloseWhatsNew();
 
     // ===================== updates =====================
 

@@ -138,6 +138,12 @@ public sealed class AppSettings
 
     public bool CloseToTray { get; set; } = true;
     public bool ShowNotifications { get; set; } = true;
+    /// <summary>Quiet chime when a capture is saved (off by default).</summary>
+    public bool PlaySaveSound { get; set; } = false;
+    /// <summary>Keep Savor's captures under this many GB by deleting the oldest (0 = no limit).</summary>
+    public int StorageLimitGb { get; set; } = 0;
+    /// <summary>Newest version whose notes were seen in "What's new".</summary>
+    public string LastSeenVersion { get; set; } = "";
 
     public EncoderCache? EncoderCache { get; set; }
 

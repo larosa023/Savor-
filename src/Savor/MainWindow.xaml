@@ -182,6 +182,14 @@
                             <TextBlock x:Name="UpdateText" Text="Update"/>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="WhatsNewButton" Style="{StaticResource CaptionButton}" Click="WhatsNew_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="What's new">
+                        <Grid>
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE81C;" FontSize="15"/>
+                            <Ellipse x:Name="WhatsNewDot" Width="7" Height="7" Fill="{StaticResource AccentBrush}"
+                                     HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-2,-4,0" Visibility="Collapsed"/>
+                        </Grid>
+                    </Button>
                     <Button x:Name="SettingsButton" Style="{StaticResource CaptionButton}" Click="Settings_Click"
                             WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Settings">
                         <TextBlock Style="{StaticResource Icon}" Text="&#xE713;" FontSize="15"/>
@@ -200,6 +208,31 @@
                     </Button>
                 </StackPanel>
             </Grid>
+
+            <!-- what's new panel -->
+            <Border x:Name="WhatsNewScrim" Grid.Row="1" Background="#01000000" Visibility="Collapsed" Panel.ZIndex="19"
+                    MouseLeftButtonDown="WhatsNewScrim_Click"/>
+            <Border x:Name="WhatsNewPanel" Grid.Row="1" Width="400" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,0,20,20" Panel.ZIndex="20" Visibility="Collapsed" CornerRadius="14"
+                    Background="{StaticResource Surface2Brush}" BorderBrush="#33353B" BorderThickness="1">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="30" ShadowDepth="6" Opacity="0.5" Color="Black"/>
+                </Border.Effect>
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="20,16,10,8">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,6" Click="WhatsNewClose_Click">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                        </Button>
+                        <StackPanel>
+                            <TextBlock Text="What's new" FontFamily="{StaticResource DisplayFont}" FontSize="17" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="WhatsNewSub" Foreground="{StaticResource FaintBrush}" FontSize="11.5" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <ScrollViewer x:Name="WhatsNewScroll" VerticalScrollBarVisibility="Auto" MaxHeight="520" Margin="0,0,4,12">
+                        <StackPanel x:Name="WhatsNewList" Margin="20,0,16,8"/>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
 
             <!-- error banner (shared) -->
             <Border x:Name="Banner" Grid.Row="1" CornerRadius="10" Background="{StaticResource RecSoftBrush}" VerticalAlignment="Top"
@@ -717,6 +750,15 @@
                                         <TextBlock Text="MP4 plays everywhere. MKV is friendlier to video editors." Style="{StaticResource RowDesc}"/>
                                     </StackPanel>
                                 </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="StorageCombo" DockPanel.Dock="Right" SelectionChanged="Storage_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Storage limit" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="StorageDesc" Style="{StaticResource RowDesc}"
+                                                   Text="When Savor's captures go over the limit, the oldest are deleted permanently."/>
+                                    </StackPanel>
+                                </DockPanel>
                             </StackPanel>
                         </Border>
 
@@ -788,6 +830,14 @@
                                     <CheckBox x:Name="NotifyToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
                                     <StackPanel>
                                         <TextBlock Text="Show a notification when a capture is saved" Style="{StaticResource RowTitle}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="SoundToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Play a sound when a capture is saved" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="A short, quiet chime, so you know a clip saved without looking away from your game." Style="{StaticResource RowDesc}"/>
                                     </StackPanel>
                                 </DockPanel>
                             </StackPanel>
