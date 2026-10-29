@@ -28,9 +28,9 @@ jobs:
           # which needs NVIDIA driver 610+, and GTX 10-series (Pascal) cards are capped at the 580 driver branch.
           # 8.x builds use SDK 13.0 (driver 570+), so NVENC keeps working on those cards.
           $assets = gh release view latest -R BtbN/FFmpeg-Builds --json assets --jq '.assets[].name'
-          $stable = $assets | Where-Object { $_ -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-[\d.]+\.zip$' } |
+          $stable = @($assets | Where-Object { $_ -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-[\d.]+\.zip$' } |
             Where-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') -lt [version]'9.0' } |
-            Sort-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') } -Descending
+            Sort-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') } -Descending)
           if (-not $stable) { throw "no FFmpeg 8.x build found" }
           $pick = $stable[0]
           Write-Host "::notice::FFmpeg build: $pick"
