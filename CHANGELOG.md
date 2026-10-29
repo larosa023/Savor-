@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.6.8 · Oct 29, 2026
+- NVIDIA GPU recording works again on GTX 10-series cards (1060, 1070, 1080 Ti…) and other cards on older drivers. Savor no longer needs NVIDIA driver 610 or newer.
+
 ## 0.6.7 · Oct 29, 2026
 - Much lower memory when recording with the CPU encoder (x264): about 250 MB instead of several GB on high-core CPUs at 1440p, with the same file size.
 - If no GPU encoder works, Settings → Encoder now says why (usually an outdated graphics driver) and which graphics card was found.

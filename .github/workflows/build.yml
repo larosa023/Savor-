@@ -24,11 +24,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Newest stable release-branch build (e.g. n8.0) from BtbN, falling back to master.
+          # Newest stable FFmpeg 8.x build from BtbN. Pinned below 9.0 on purpose: 9.x builds use NVENC SDK 13.1+,
+          # which needs NVIDIA driver 610+, and GTX 10-series (Pascal) cards are capped at the 580 driver branch.
+          # 8.x builds use SDK 13.0 (driver 570+), so NVENC keeps working on those cards.
           $assets = gh release view latest -R BtbN/FFmpeg-Builds --json assets --jq '.assets[].name'
           $stable = $assets | Where-Object { $_ -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-[\d.]+\.zip$' } |
+            Where-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') -lt [version]'9.0' } |
             Sort-Object { [version]($_ -replace '^ffmpeg-n(\d+\.\d+).*','$1') } -Descending
-          $pick = if ($stable) { $stable[0] } else { "ffmpeg-master-latest-win64-gpl.zip" }
+          if (-not $stable) { throw "no FFmpeg 8.x build found" }
+          $pick = $stable[0]
           Write-Host "::notice::FFmpeg build: $pick"
           gh release download latest -R BtbN/FFmpeg-Builds -p $pick -O ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
