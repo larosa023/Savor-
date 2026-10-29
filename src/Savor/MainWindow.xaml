@@ -861,6 +861,22 @@
                                         <TextBlock Text="A short, quiet chime, so you know a clip saved without looking away from your game." Style="{StaticResource RowDesc}"/>
                                     </StackPanel>
                                 </DockPanel>
+                                <StackPanel x:Name="SoundVolumeRow">
+                                    <Border Style="{StaticResource Divider}"/>
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Slider x:Name="SoundVolumeSlider" Width="200" Minimum="0" Maximum="100"
+                                                    SmallChange="5" LargeChange="10" TickFrequency="5" IsSnapToTickEnabled="True"
+                                                    ValueChanged="SoundVolume_Changed"/>
+                                            <TextBlock x:Name="SoundVolumeValue" Width="64" TextAlignment="Right" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="Sound volume" Style="{StaticResource RowTitle}"/>
+                                            <TextBlock Text="Plays a preview when you let go." Style="{StaticResource RowDesc}"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

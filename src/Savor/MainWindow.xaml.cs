@@ -284,7 +284,7 @@ public partial class MainWindow : Window
 
     void OnSaved(string path, bool recording)
     {
-        if (_settings.PlaySaveSound) Chime.Play();
+        if (_settings.PlaySaveSound) Chime.Play(_settings.SaveSoundVolume);
         ReloadClips();
         if (_settings.ShowNotifications)
             Notify(recording ? "Recording saved" : "Clip saved", Path.GetFileName(path), onClick: () => Reveal(path));
@@ -1476,6 +1476,9 @@ public partial class MainWindow : Window
             TrayToggle.IsChecked = _settings.CloseToTray;
             NotifyToggle.IsChecked = _settings.ShowNotifications;
             SoundToggle.IsChecked = _settings.PlaySaveSound;
+            SoundVolumeSlider.Value = Math.Round(_settings.SaveSoundVolume * 100);
+            SoundVolumeValue.Text = $"{SoundVolumeSlider.Value:0}%";
+            SoundVolumeRow.Visibility = _settings.PlaySaveSound ? Visibility.Visible : Visibility.Collapsed;
             StorageCombo.Items.Clear();
             foreach (var (gb, label) in new[] { (0, "No limit"), (10, "10 GB"), (25, "25 GB"), (50, "50 GB"), (100, "100 GB"), (250, "250 GB"), (500, "500 GB") })
                 StorageCombo.Items.Add(new ComboBoxItem { Content = label, Tag = gb });
@@ -1561,6 +1564,24 @@ public partial class MainWindow : Window
         RefreshState();
     }
 
+    DispatcherTimer? _chimePreview;
+
+    void SoundVolume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loadingUi || SoundVolumeValue == null) return;
+        _settings.SaveSoundVolume = SoundVolumeSlider.Value / 100;
+        SoundVolumeValue.Text = $"{SoundVolumeSlider.Value:0}%";
+        SaveSoon();
+        // preview once the slider settles (on release, or a short pause while dragging / using arrow keys)
+        if (_chimePreview == null)
+        {
+            _chimePreview = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _chimePreview.Tick += (_, _) => { _chimePreview!.Stop(); if (_settings.PlaySaveSound) Chime.Play(_settings.SaveSoundVolume); };
+        }
+        _chimePreview.Stop();
+        _chimePreview.Start();
+    }
+
     void General_Changed(object sender, RoutedEventArgs e)
     {
         if (_loadingUi) return;
@@ -1569,7 +1590,8 @@ public partial class MainWindow : Window
         _settings.ShowNotifications = NotifyToggle.IsChecked == true;
         bool soundWasOn = _settings.PlaySaveSound;
         _settings.PlaySaveSound = SoundToggle.IsChecked == true;
-        if (_settings.PlaySaveSound && !soundWasOn) Chime.Play(); // let them hear it
+        if (_settings.PlaySaveSound && !soundWasOn) Chime.Play(_settings.SaveSoundVolume); // let them hear it
+        SoundVolumeRow.Visibility = _settings.PlaySaveSound ? Visibility.Visible : Visibility.Collapsed;
         var container = SelectedTag<string>(ContainerCombo) ?? "mp4";
         _settings.Container = container;
         if (ReferenceEquals(sender, StartupToggle)) StartupManager.Set(StartupToggle.IsChecked == true);

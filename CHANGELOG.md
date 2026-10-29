@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.6.6 · Oct 29, 2026
+- Volume slider for the save sound (Settings → General). It plays a preview as you adjust it.
+
 ## 0.6.5 · Oct 29, 2026
 - Fixed hotkeys sometimes stopping working while Savor is in the tray. Hotkeys now run on their own and re-attach automatically.
 - Capture now reconnects by itself after a game changes resolution, a lock screen or UAC prompt, sleep, or switching audio devices (like plugging in headphones). The replay buffer and recordings carry on instead of turning off.

@@ -8,12 +8,16 @@ namespace Savor.Core;
 public static class Chime
 {
     static byte[]? _wav;
+    static double _wavVolume = -1;
 
-    public static void Play()
+    /// <param name="volume">0–1. Uses a perceptual curve, so 0.5 sounds like "half" (and is the original chime).</param>
+    public static void Play(double volume = 0.5)
     {
         try
         {
-            _wav ??= Build();
+            volume = Math.Clamp(volume, 0, 1);
+            if (volume <= 0.001) return;
+            if (_wav == null || Math.Abs(_wavVolume - volume) > 0.001) { _wav = Build(volume); _wavVolume = volume; }
             var player = new SoundPlayer(new MemoryStream(_wav));
             player.Play(); // asynchronous, never blocks
         }
@@ -21,9 +25,10 @@ public static class Chime
     }
 
     /// <summary>Generates the chime as a tiny 16-bit WAV (no sound files shipped).</summary>
-    static byte[] Build()
+    static byte[] Build(double volume)
     {
         const int rate = 44100;
+        double amp = 0.88 * volume * volume; // 0.5 → 0.22, the original level
         var notes = new (double freq, double secs)[] { (880, 0.07), (1318.5, 0.11) };
         int total = 0;
         foreach (var n in notes) total += (int)(n.secs * rate);
@@ -36,7 +41,7 @@ public static class Chime
             {
                 double t = (double)i / rate;
                 double env = Math.Min(1, i / (rate * 0.004)) * Math.Exp(-t * 18); // soft attack, quick fade
-                samples[pos++] = (short)(Math.Sin(2 * Math.PI * freq * t) * env * 0.22 * short.MaxValue);
+                samples[pos++] = (short)(Math.Sin(2 * Math.PI * freq * t) * env * amp * short.MaxValue);
             }
         }
 

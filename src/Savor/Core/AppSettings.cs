@@ -140,6 +140,8 @@ public sealed class AppSettings
     public bool ShowNotifications { get; set; } = true;
     /// <summary>Quiet chime when a capture is saved (off by default).</summary>
     public bool PlaySaveSound { get; set; } = false;
+    /// <summary>Save chime volume, 0–1 (0.5 = the original quiet chime).</summary>
+    public double SaveSoundVolume { get; set; } = 0.5;
     /// <summary>Keep Savor's captures under this many GB by deleting the oldest (0 = no limit).</summary>
     public int StorageLimitGb { get; set; } = 0;
     /// <summary>Newest version whose notes were seen in "What's new".</summary>
