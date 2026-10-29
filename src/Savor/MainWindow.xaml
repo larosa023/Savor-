@@ -22,11 +22,15 @@
         <DrawingImage x:Key="LiveOverlay">
             <DrawingImage.Drawing>
                 <DrawingGroup>
+                    <!-- transparent 16x16 frame so Windows doesn't stretch the dot to fill the badge -->
+                    <GeometryDrawing Brush="Transparent">
+                        <GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,16,16"/></GeometryDrawing.Geometry>
+                    </GeometryDrawing>
                     <GeometryDrawing Brush="#FF0E0F11">
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="8" RadiusY="8"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="6.5" RadiusY="6.5"/></GeometryDrawing.Geometry>
                     </GeometryDrawing>
                     <GeometryDrawing Brush="#FFFF3B4E">
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="6" RadiusY="6"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="4.8" RadiusY="4.8"/></GeometryDrawing.Geometry>
                     </GeometryDrawing>
                 </DrawingGroup>
             </DrawingImage.Drawing>

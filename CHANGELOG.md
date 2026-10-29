@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.6.4 · Oct 29, 2026
+- Slightly smaller recording dot on the taskbar and tray icons.
+
 ## 0.6.3 · Oct 29, 2026
 - A red dot on Savor's taskbar and tray icons shows when the replay buffer or a recording is on.
 

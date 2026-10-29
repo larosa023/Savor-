@@ -85,7 +85,7 @@ public sealed class TrayIcon : IDisposable
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.DrawIcon(new Icon(baseIcon, size, size), new Rectangle(0, 0, size, size));
-                float d = size * 0.5f, x = size - d, y = size - d;
+                float d = size * 0.42f, x = size - d, y = size - d;
                 using var ring = new SolidBrush(Color.FromArgb(255, 0x0E, 0x0F, 0x11));
                 using var red = new SolidBrush(Color.FromArgb(255, 0xFF, 0x3B, 0x4E));
                 g.FillEllipse(ring, x - 1, y - 1, d + 1, d + 1);
