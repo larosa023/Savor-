@@ -402,6 +402,10 @@ public partial class MainWindow : Window
         PreviewRecChip.Visibility = rec ? Visibility.Visible : Visibility.Collapsed;
         StatusDot.Fill = (Brush)FindResource(rec ? "RecBrush" : _engine.IsRunning ? "LiveBrush" : "FaintBrush");
         _tray?.Update(buffer, rec);
+        // red dot on the taskbar icon while anything is capturing
+        bool live = buffer || rec;
+        TaskbarInfo.Overlay = live ? (ImageSource)FindResource("LiveOverlay") : null;
+        TaskbarInfo.Description = rec ? "Savor — recording" : buffer ? "Savor — replay buffer on" : "Savor";
         UpdateTrackLabels();
     }
 

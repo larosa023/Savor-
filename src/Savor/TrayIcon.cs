@@ -52,8 +52,15 @@ public sealed class TrayIcon : IDisposable
         _icon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowRequested?.Invoke(); };
     }
 
+    Icon? _normalIcon, _liveIcon;
+
     public void Update(bool bufferActive, bool recording)
     {
+        bool live = bufferActive || recording;
+        _normalIcon ??= _icon.Icon;
+        if (live) _liveIcon ??= WithDot(_normalIcon);
+        var want = live ? _liveIcon : _normalIcon;
+        if (want != null && !ReferenceEquals(_icon.Icon, want)) _icon.Icon = want;
         _bufferItem.Text = bufferActive ? "Stop replay buffer" : "Start replay buffer";
         _saveItem.Enabled = bufferActive;
         _recordItem.Text = recording ? "Stop recording" : "Start recording";
@@ -66,6 +73,34 @@ public sealed class TrayIcon : IDisposable
         i.Click += (_, _) => onClick();
         return i;
     }
+
+    /// <summary>The app icon with a small red dot in the bottom-right corner.</summary>
+    static Icon? WithDot(Icon baseIcon)
+    {
+        try
+        {
+            int size = SystemInformation.SmallIconSize.Width;
+            using var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.DrawIcon(new Icon(baseIcon, size, size), new Rectangle(0, 0, size, size));
+                float d = size * 0.5f, x = size - d, y = size - d;
+                using var ring = new SolidBrush(Color.FromArgb(255, 0x0E, 0x0F, 0x11));
+                using var red = new SolidBrush(Color.FromArgb(255, 0xFF, 0x3B, 0x4E));
+                g.FillEllipse(ring, x - 1, y - 1, d + 1, d + 1);
+                g.FillEllipse(red, x + 1, y + 1, d - 3, d - 3);
+            }
+            IntPtr h = bmp.GetHicon();
+            var icon = (Icon)Icon.FromHandle(h).Clone();
+            DestroyIcon(h);
+            return icon;
+        }
+        catch { return null; }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool DestroyIcon(IntPtr handle);
 
     static Icon LoadIcon()
     {

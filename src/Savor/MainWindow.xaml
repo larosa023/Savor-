@@ -13,7 +13,24 @@
                       CornerRadius="0" UseAeroCaptionButtons="False"/>
     </WindowChrome.WindowChrome>
 
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="TaskbarInfo"/>
+    </Window.TaskbarItemInfo>
+
     <Window.Resources>
+        <!-- red "live" dot shown on the taskbar icon while the replay buffer or a recording is on -->
+        <DrawingImage x:Key="LiveOverlay">
+            <DrawingImage.Drawing>
+                <DrawingGroup>
+                    <GeometryDrawing Brush="#FF0E0F11">
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="8" RadiusY="8"/></GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#FFFF3B4E">
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="8,8" RadiusX="6" RadiusY="6"/></GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingGroup>
+            </DrawingImage.Drawing>
+        </DrawingImage>
         <Storyboard x:Key="PulseLive" RepeatBehavior="Forever" AutoReverse="True">
             <DoubleAnimation Storyboard.TargetName="BufferDotHalo" Storyboard.TargetProperty="Opacity"
                              From="0.15" To="0.55" Duration="0:0:0.9"/>
