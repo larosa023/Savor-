@@ -12,10 +12,11 @@ public static class Storage
 
     /// <summary>Only files Savor made (clips, recordings and their edits) are ever touched.</summary>
     static bool IsSavorCapture(FileInfo f) =>
-        (f.Name.StartsWith("Clip ", StringComparison.OrdinalIgnoreCase) ||
-         f.Name.StartsWith("Recording ", StringComparison.OrdinalIgnoreCase)) &&
         (f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
-         f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase));
+         f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase)) &&
+        (f.Name.StartsWith("Clip ", StringComparison.OrdinalIgnoreCase) ||
+         f.Name.StartsWith("Recording ", StringComparison.OrdinalIgnoreCase) ||
+         ClipMeta.Read(f.FullName) != null); // game-named or renamed captures carry Savor's info stream
 
     /// <summary>
     /// Deletes the oldest captures until the folder's Savor captures total at most <paramref name="limitGb"/>.

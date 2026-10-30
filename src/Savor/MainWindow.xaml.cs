@@ -203,6 +203,7 @@ public partial class MainWindow : Window
         }
 
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId);
+        try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         if (_engine.Encoder == null)
         {
             ShowError("No working video encoder was found. Make sure your graphics drivers are up to date, then use Settings → Encoder → re-detect.");
@@ -999,6 +1000,7 @@ public partial class MainWindow : Window
         _settings.Save();
 
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
+        try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         _captureDirty = true;
         LoadStudioUi();
         SourceNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
@@ -1054,6 +1056,10 @@ public partial class MainWindow : Window
 
     // ===================== clips =====================
 
+    string? _gameFilter;      // null = all captures
+    string _filterSignature = "";
+    const int MaxCards = 60;  // newest N cards (thumbnails cost memory)
+
     void ReloadClips()
     {
         if (_clipsNeedThumbs)
@@ -1061,22 +1067,122 @@ public partial class MainWindow : Window
             _clipsNeedThumbs = false;
             _clips.Clear(); // forces fresh items whose thumbnails load from the disk cache
         }
-        var items = Library.Scan(_settings.OutputFolder);
+        var all = Library.Scan(_settings.OutputFolder);
+        BuildGameFilters(all);
+        var items = all.Where(c => _gameFilter == null || string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase))
+                       .Take(MaxCards).ToList();
         var known = _clips.ToDictionary(c => c.FilePath + c.Size, c => c);
         _clips.Clear();
         foreach (var it in items)
         {
-            if (known.TryGetValue(it.FilePath + it.Size, out var existing)) { _clips.Add(existing); continue; }
+            if (known.TryGetValue(it.FilePath + it.Size, out var existing) && existing.Game == it.Game) { _clips.Add(existing); continue; }
             _clips.Add(it);
             _ = Library.LoadThumbnailAsync(it);
         }
         EmptyState.Visibility = _clips.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ClipCount.Text = _clips.Count == 0 ? "" : _clips.Count.ToString();
+        ClipCount.Text = all.Count == 0 ? "" : all.Count.ToString();
+    }
+
+    /// <summary>"All · Valorant 12 · Minecraft 3" chips; only shown once some captures have a game.</summary>
+    void BuildGameFilters(List<ClipItem> all)
+    {
+        var games = all.Where(c => c.Game != null)
+            .GroupBy(c => c.Game!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Name: g.First().Game!, Count: g.Count(), Latest: g.Max(c => c.Created)))
+            .OrderByDescending(g => g.Latest)
+            .ToList();
+        if (_gameFilter != null && !games.Any(g => string.Equals(g.Name, _gameFilter, StringComparison.OrdinalIgnoreCase)))
+            _gameFilter = null;
+
+        var sig = (_gameFilter ?? "") + "|" + all.Count + "|" + string.Join("|", games.Select(g => g.Name + g.Count));
+        if (sig == _filterSignature) return;
+        _filterSignature = sig;
+
+        GameFilters.Children.Clear();
+        GameFilters.Visibility = games.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (games.Count == 0) return;
+        GameFilters.Children.Add(FilterChip("All", all.Count, null));
+        foreach (var g in games) GameFilters.Children.Add(FilterChip(g.Name, g.Count, g.Name));
+    }
+
+    RadioButton FilterChip(string label, int count, string? game)
+    {
+        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(new TextBlock { Text = label });
+        content.Children.Add(new TextBlock { Text = count.ToString(), Margin = new Thickness(7, 0, 0, 0), Foreground = (Brush)FindResource("FaintBrush") });
+        var rb = new RadioButton
+        {
+            Style = (Style)FindResource("FilterChip"),
+            Content = content,
+            IsChecked = string.Equals(_gameFilter, game, StringComparison.OrdinalIgnoreCase),
+        };
+        rb.Checked += (_, _) =>
+        {
+            if (string.Equals(_gameFilter, game, StringComparison.OrdinalIgnoreCase)) return;
+            _gameFilter = game;
+            ReloadClips();
+        };
+        return rb;
+    }
+
+    // ----- rename (right-click → Rename, edited right on the card) -----
+
+    long _renameStarted;
+
+    void ClipRename_Click(object sender, RoutedEventArgs e)
+    {
+        if (ClipFrom(sender) is not { } c) return;
+        foreach (var other in _clips) if (other != c) other.IsRenaming = false;
+        c.IsRenaming = true;
+    }
+
+    void RenameBox_VisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not TextBox box || !box.IsVisible || box.Tag is not ClipItem c) return;
+        box.Text = c.Name;
+        _renameStarted = Environment.TickCount64;
+        // after the right-click menu has closed and handed focus back
+        Dispatcher.BeginInvoke(() => { box.Focus(); Keyboard.Focus(box); box.SelectAll(); }, DispatcherPriority.ContextIdle);
+    }
+
+    void RenameBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { Tag: ClipItem c } box) return;
+        if (e.Key == Key.Enter) { CommitRename(c, box.Text); e.Handled = true; }
+        else if (e.Key == Key.Escape) { c.IsRenaming = false; e.Handled = true; }
+    }
+
+    void RenameBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not TextBox { Tag: ClipItem c } box || !c.IsRenaming) return;
+        if (Environment.TickCount64 - _renameStarted < 400)
+        {
+            // the closing menu briefly took focus: take it back instead of ending the rename
+            Dispatcher.BeginInvoke(() => { box.Focus(); Keyboard.Focus(box); box.SelectAll(); }, DispatcherPriority.ContextIdle);
+            return;
+        }
+        CommitRename(c, box.Text);
+    }
+
+    // clicking inside the box must not open the clip
+    void RenameBox_MouseUp(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void CommitRename(ClipItem c, string name)
+    {
+        if (!c.IsRenaming) return;
+        c.IsRenaming = false;
+        if (name.Trim() == c.Name) return;
+        try
+        {
+            Library.Rename(c.FilePath, name);
+            ReloadClips();
+        }
+        catch (Exception ex) { Notify("Couldn't rename", ex.Message, error: true); }
     }
 
     static ClipItem? ClipFrom(object sender) => (sender as FrameworkElement)?.DataContext as ClipItem;
 
-    void ClipCard_Click(object sender, MouseButtonEventArgs e) { if (ClipFrom(sender) is { } c) OpenEditor(c.FilePath); }
+    void ClipCard_Click(object sender, MouseButtonEventArgs e) { if (ClipFrom(sender) is { IsRenaming: false } c) OpenEditor(c.FilePath); }
     void ClipOpen_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenEditor(c.FilePath); }
     void ClipExternal_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenFile(c.FilePath); }
 
@@ -1156,6 +1262,32 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { LogError("Storage self-test", ex); }
 
+        // capture info stream, rename, name fallback, game detection
+        try
+        {
+            var dir = Path.Combine(AppSettings.LocalDataDir, "meta-test");
+            Directory.CreateDirectory(dir);
+            var f = Path.Combine(dir, "VALORANT 2026-10-30 21.14.05.mp4");
+            File.WriteAllBytes(f, new byte[16]);
+            new ClipMeta(ClipMeta.Recording, "VALORANT").Write(f);
+            var renamed = Library.Rename(f, "my best ace: round 12");
+            var m = ClipMeta.Read(renamed);
+            var scan = Library.Scan(dir);
+            var guess = ClipMeta.FromName("Rocket League Recording 2026-10-30 21.14.05");
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"meta: renamed to [{Path.GetFileName(renamed)}], kind={m?.Kind}, game={m?.Game}, scan game={scan.FirstOrDefault()?.Game}, " +
+                $"rec={scan.FirstOrDefault()?.IsRecording}, from name: {guess?.Kind}/{guess?.Game}, foreground now: {ForegroundApp.CurrentName() ?? "(none)"}\n");
+            Directory.Delete(dir, true);
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "meta: FAILED " + ex.Message + "\n"); }
+
+        try
+        {
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                "diagnostics:\n" + await BuildDiagnosticsAsync() + "\n");
+        }
+        catch (Exception ex) { LogError("Diagnostics self-test", ex); }
+
         try
         {
             var result = await _editor.SelfTestScrubAsync();
@@ -1201,6 +1333,7 @@ public partial class MainWindow : Window
             _editor = new ClipEditor();
             _editor.CloseRequested += CloseEditor;
             _editor.Exported += _ => ReloadClips();
+            _editor.Renamed += _ => ReloadClips();
             EditorPage.Children.Add(_editor);
         }
         if (SettingsPage.Visibility == Visibility.Visible) SettingsPage.Visibility = Visibility.Collapsed;
@@ -1441,6 +1574,7 @@ public partial class MainWindow : Window
             foreach (var f in new[] { 30, 60, 120, 144, 165, 240 })
                 FpsCombo.Items.Add(new ComboBoxItem { Content = $"{f} fps", Tag = f });
             if (!SelectByTag(FpsCombo, _settings.Fps)) SelectByTag(FpsCombo, 60);
+            FillResolutions();
 
             QualityCombo.Items.Clear();
             foreach (var (q, label) in new[] {
@@ -1545,9 +1679,46 @@ public partial class MainWindow : Window
 
     static string FormatShort(int s) => s < 60 ? $"{s}s" : $"{s / 60}:{s % 60:00}";
 
-    void Capture_Changed(object sender, RoutedEventArgs e)
+    /// <summary>Native size plus common smaller sizes for the chosen display.</summary>
+    void FillResolutions()
+    {
+        bool was = _loadingUi;
+        _loadingUi = true;
+        try
+        {
+            var d = _displays.FirstOrDefault(x => x.OutputIndex == SelectedTag<int>(DisplayCombo)) ?? _engine.Display ?? _displays.FirstOrDefault();
+            ResolutionCombo.Items.Clear();
+            ResolutionCombo.Items.Add(new ComboBoxItem { Content = d != null ? $"Native  ·  {d.Width}×{d.Height}" : "Native", Tag = 0 });
+            foreach (var h in new[] { 2160, 1440, 1080, 900, 720 })
+                if (Ffmpeg.OutputSize(d, h) is { } sz)
+                    ResolutionCombo.Items.Add(new ComboBoxItem { Content = $"{h}p  ·  {sz.W}×{sz.H}", Tag = h });
+            if (!SelectByTag(ResolutionCombo, _settings.OutputHeight)) SelectByTag(ResolutionCombo, 0);
+        }
+        finally { _loadingUi = was; }
+    }
+
+    /// <summary>When recording below native size, checks once whether the GPU can do the resizing (no CPU cost).</summary>
+    async Task PrepareScaleAsync()
+    {
+        var size = Ffmpeg.OutputSize(_engine.Display, _settings.OutputHeight);
+        var enc = _engine.Encoder;
+        if (size is not { } sz || enc == null || enc.Pipeline != CapturePipeline.DdaDirect) { _engine.GpuScale = false; return; }
+        var key = $"{enc.Key}|{sz.W}x{sz.H}|{Ffmpeg.Stamp()}|{GpuInfo.Stamp()}";
+        if (!_settings.GpuScaleTests.TryGetValue(key, out var ok))
+        {
+            ok = await Task.Run(() => Ffmpeg.TestGpuScaleAsync(enc, sz));
+            if (_settings.GpuScaleTests.Count > 16) _settings.GpuScaleTests.Clear();
+            _settings.GpuScaleTests[key] = ok;
+            _settings.Save();
+        }
+        _engine.GpuScale = ok;
+    }
+
+    async void Capture_Changed(object sender, RoutedEventArgs e)
     {
         if (_loadingUi) return;
+        if (ReferenceEquals(sender, DisplayCombo)) FillResolutions();
+        _settings.OutputHeight = SelectedTag<int>(ResolutionCombo);
         _settings.DisplayIndex = SelectedTag<int>(DisplayCombo);
         int fps = SelectedTag<int>(FpsCombo);
         _settings.Fps = fps > 0 ? fps : 60;
@@ -1563,6 +1734,7 @@ public partial class MainWindow : Window
 
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId);
+        try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         _captureDirty = true;
         ApplyNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
         RefreshState();
@@ -1663,6 +1835,101 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { ShowError(ex.Message); }
     }
+
+    // ===================== diagnostics =====================
+
+    async void CopyDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var text = await BuildDiagnosticsAsync();
+            Clipboard.SetText(text);
+            DiagButtonText.Text = "Copied";
+            await Task.Delay(2000);
+            DiagButtonText.Text = "Copy diagnostics";
+        }
+        catch (Exception ex) { Notify("Couldn't copy diagnostics", ex.Message, error: true); }
+    }
+
+    async Task<string> BuildDiagnosticsAsync()
+    {
+        var sb = new System.Text.StringBuilder();
+        void Line(string s) => sb.AppendLine(s);
+        static string Reg(string key, string name)
+        {
+            try { return Microsoft.Win32.Registry.LocalMachine.OpenSubKey(key)?.GetValue(name)?.ToString() ?? "?"; }
+            catch { return "?"; }
+        }
+
+        Line($"Savor {Updater.Current}  ·  {DateTime.Now:yyyy-MM-dd HH:mm}");
+        const string nt = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+        Line($"Windows: {Reg(nt, "ProductName")} {Reg(nt, "DisplayVersion")} (build {Reg(nt, "CurrentBuild")})");
+        Line($"CPU: {Reg(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString").Trim()} · {Environment.ProcessorCount} threads");
+        Line($"RAM: {GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (double)(1L << 30):0.0} GB");
+        foreach (var g in GpuInfo.Adapters()) Line($"GPU: {g.Name} · driver {g.FriendlyVersion} ({g.DriverVersion})");
+        foreach (var d in _displays) Line($"Display: {d.Label.Replace("  ", " ")}");
+
+        string ffver = "?";
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(Ffmpeg.Path ?? "ffmpeg", "-version")
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+            if (p != null) { ffver = (await p.StandardOutput.ReadLineAsync())?.Trim() ?? ffver; p.WaitForExit(3000); }
+        }
+        catch { }
+        Line($"FFmpeg: {ffver}");
+
+        Line("");
+        Line($"Encoders found: {(_encoders.Count == 0 ? "none" : string.Join(", ", _encoders.Select(x => $"{x.Name} [{x.Pipeline}]")))}");
+        Line($"Encoder in use: {_engine.Encoder?.Name ?? "none"} [{_engine.Encoder?.Pipeline}] (setting: {_settings.EncoderId})");
+        foreach (var f in _encoderFailures)
+            Line($"GPU failure [{f.Key}]: {Shorten(f.Value.Replace("\r", "").Replace('\n', ' '), 400)}");
+        var size = Ffmpeg.OutputSize(_engine.Display, _settings.OutputHeight);
+        Line($"Capture: {_engine.Display?.Label.Replace("  ", " ") ?? "?"} · {_settings.Fps} fps · {_settings.Quality} · " +
+             (size is { } sz ? $"output {sz.W}×{sz.H} ({(_engine.GpuScale ? "GPU" : "CPU")} resize)" : "native size") +
+             $" · cursor {(_settings.CaptureCursor ? "on" : "off")} · {_settings.Container}");
+        Line($"Audio: desktop {(_settings.DesktopAudio ? "on" : "off")} · mic {(string.IsNullOrEmpty(_settings.MicDeviceId) ? "off" : "on")} · " +
+             $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
+             (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));
+        Line($"Replay buffer: {(_engine.BufferActive ? "on" : "off")} ({_settings.ReplaySeconds} s) · recording {(_engine.Recording ? "yes" : "no")} · " +
+             $"capture running {(_engine.IsRunning ? "yes" : "no")}");
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(_settings.OutputFolder));
+            if (root != null) Line($"Captures drive: {Storage.Gb(Storage.FreeBytes(root))} free · storage limit {(_settings.StorageLimitGb > 0 ? _settings.StorageLimitGb + " GB" : "none")}");
+        }
+        catch { }
+        Line($"Savor memory: {Process.GetCurrentProcess().PrivateMemorySize64 / (double)(1L << 20):0} MB");
+
+        var log = _engine.RecentLog().Trim();
+        if (log.Length > 0)
+        {
+            Line("");
+            Line("Recent capture log:");
+            foreach (var l in log.Split('\n').TakeLast(20)) Line("  " + l.TrimEnd());
+        }
+        try
+        {
+            var errFile = Path.Combine(AppSettings.LocalDataDir, "errors.log");
+            if (File.Exists(errFile))
+            {
+                var t = File.ReadAllText(errFile);
+                if (t.Length > 3000) t = "…" + t[^3000..];
+                Line("");
+                Line("Recent errors:");
+                Line(t.Trim());
+            }
+        }
+        catch { }
+
+        // don't share the Windows user name
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var text = sb.ToString();
+        if (profile.Length > 3) text = text.Replace(profile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
+        return text;
+    }
+
+    static string Shorten(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 
     // ===================== navigation & chrome =====================
 

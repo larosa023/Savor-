@@ -95,8 +95,9 @@
                 </Button>
             </StackPanel>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock x:Name="TitleText" FontFamily="{StaticResource DisplayFont}" FontSize="17" FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis"/>
+                <TextBox x:Name="TitleText" Style="{StaticResource InlineEdit}" FontFamily="{StaticResource DisplayFont}" FontSize="17"
+                         FontWeight="SemiBold" Margin="-6,-3,0,-3" HorizontalAlignment="Left" MinWidth="120" MaxWidth="560"
+                         ToolTip="Click to rename" PreviewKeyDown="Title_KeyDown" LostKeyboardFocus="Title_LostFocus"/>
                 <TextBlock x:Name="MetaText" Foreground="{StaticResource FaintBrush}" FontSize="11.5" Margin="0,1,0,0"/>
             </StackPanel>
         </DockPanel>

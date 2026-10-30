@@ -49,10 +49,13 @@ public sealed class CaptureEngine : IDisposable
     public string BufferDir { get; } = Path.Combine(AppSettings.LocalDataDir, "buffer");
     public EncoderChoice? Encoder { get; set; }
     public DisplayInfo? Display { get; set; }
+    /// <summary>The GPU can resize frames for the current encoder and output size (checked by the app).</summary>
+    public bool GpuScale { get; set; }
 
     public bool BufferActive { get; private set; }
     public bool Recording { get; private set; }
     public DateTime RecordingStartedUtc { get; private set; }
+    string? _recordGame; // the game in focus when recording started (names the file)
     public DateTime StartedUtc { get; private set; }
     public bool IsRunning => _proc is { HasExited: false };
     public AudioMixer? Mixer => _mixer;
@@ -118,8 +121,11 @@ public sealed class CaptureEngine : IDisposable
             _holdFrom = pick[0].Index;
             try
             {
-                var output = OutputPath("Clip", s);
-                return await ConcatAsync(pick.Select(p => p.Path).ToList(), output, s) ? output : null;
+                var game = ForegroundApp.CurrentName();
+                var output = OutputPath(game ?? "Clip", s);
+                if (!await ConcatAsync(pick.Select(p => p.Path).ToList(), output, s)) return null;
+                new ClipMeta(ClipMeta.Clip, game).Write(output);
+                return output;
             }
             finally { _holdFrom = int.MaxValue; }
         }
@@ -137,6 +143,7 @@ public sealed class CaptureEngine : IDisposable
             var segs = Segments();
             _recordFrom = fresh || segs.Count == 0 ? 0 : segs[^1].Index;
             RecordingStartedUtc = DateTime.UtcNow;
+            _recordGame = ForegroundApp.CurrentName();
             Recording = true;
         }
         finally { _op.Release(); StateChanged?.Invoke(); }
@@ -163,8 +170,13 @@ public sealed class CaptureEngine : IDisposable
             string? result = null;
             if (segs.Count > 0)
             {
-                var output = OutputPath("Recording", s);
-                if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s)) result = output;
+                var game = _recordGame ?? ForegroundApp.CurrentName();
+                var output = OutputPath(game != null ? game + " Recording" : "Recording", s);
+                if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s))
+                {
+                    result = output;
+                    new ClipMeta(ClipMeta.Recording, game).Write(output);
+                }
             }
             _holdFrom = int.MaxValue;
             if (stopped && result != null) ClearBufferDir();
@@ -329,7 +341,7 @@ public sealed class CaptureEngine : IDisposable
         if (tracks == 1) a.AddRange(new[] { "-map", "1:a" });
         for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
 
-        var vf = Ffmpeg.VideoFilter(enc);
+        var vf = Ffmpeg.VideoFilter(enc, Ffmpeg.OutputSize(d, s.OutputHeight), GpuScale);
         if (vf != null) a.AddRange(new[] { "-vf", vf });
         a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
 
@@ -568,6 +580,8 @@ public sealed class CaptureEngine : IDisposable
     {
         Directory.CreateDirectory(s.OutputFolder);
         var stamp = DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss");
+        kind = ClipMeta.SafeFileName(kind);
+        if (kind.Length == 0) kind = "Clip";
         var path = Path.Combine(s.OutputFolder, $"{kind} {stamp}.{s.Container}");
         int n = 2;
         while (File.Exists(path))

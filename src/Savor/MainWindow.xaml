@@ -80,6 +80,12 @@
             </Setter>
         </Style>
 
+        <Style x:Key="FilterChip" TargetType="RadioButton" BasedOn="{StaticResource NavTab}">
+            <Setter Property="GroupName" Value="GameFilter"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
         <!-- clip card -->
         <DataTemplate x:Key="ClipTemplate">
             <Border x:Name="Card" Width="232" Margin="0,0,14,14" CornerRadius="12" Background="{StaticResource SurfaceBrush}"
@@ -88,6 +94,7 @@
                 <Border.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="View &amp; edit" Click="ClipOpen_Click"/>
+                        <MenuItem Header="Rename" Click="ClipRename_Click"/>
                         <MenuItem Header="Open in default player" Click="ClipExternal_Click"/>
                         <MenuItem Header="Show in folder" Click="ClipReveal_Click"/>
                         <MenuItem Header="Copy file" Click="ClipCopy_Click"/>
@@ -114,7 +121,12 @@
                         </Border>
                     </Grid>
                     <StackPanel Margin="12,10,12,12">
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <Grid>
+                            <TextBlock x:Name="NameText" Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                            <TextBox x:Name="NameBox" Visibility="Collapsed" Style="{StaticResource InlineEdit}" FontWeight="SemiBold" Margin="-6,-3,-6,-3"
+                                     Tag="{Binding}" IsVisibleChanged="RenameBox_VisibleChanged" PreviewKeyDown="RenameBox_KeyDown"
+                                     LostKeyboardFocus="RenameBox_LostFocus" MouseLeftButtonUp="RenameBox_MouseUp"/>
+                        </Grid>
                         <TextBlock Text="{Binding Meta}" Foreground="{StaticResource MutedBrush}" FontSize="11.5" Margin="0,3,0,0"/>
                     </StackPanel>
                 </StackPanel>
@@ -122,6 +134,10 @@
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding HasDuration}" Value="False">
                     <Setter TargetName="DurationChip" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                    <Setter TargetName="NameText" Property="Visibility" Value="Hidden"/>
+                    <Setter TargetName="NameBox" Property="Visibility" Value="Visible"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsRecording}" Value="True">
                     <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource LineBrush}"/>
@@ -561,6 +577,7 @@
             <Grid x:Name="CapturesPage" Grid.Row="1" Margin="24,0,24,0" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <DockPanel Margin="2,6,0,14">
@@ -573,7 +590,9 @@
                     <TextBlock Text="Captures" FontFamily="{StaticResource DisplayFont}" FontSize="20"
                                FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
-                <Grid Grid.Row="1">
+                <!-- one chip per game, shown once captures have games -->
+                <WrapPanel x:Name="GameFilters" Grid.Row="1" Margin="0,-4,0,10" Visibility="Collapsed"/>
+                <Grid Grid.Row="2">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,-10,0">
                         <ItemsControl x:Name="ClipList" ItemTemplate="{StaticResource ClipTemplate}" Margin="0,0,0,10">
                             <ItemsControl.ItemsPanel>
@@ -625,6 +644,14 @@
                                     <StackPanel>
                                         <TextBlock Text="Frame rate" Style="{StaticResource RowTitle}"/>
                                         <TextBlock Text="Higher looks smoother but makes bigger files." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="ResolutionCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed" MinWidth="190"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Resolution" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="ResolutionDesc" Text="Lower makes smaller files and is lighter on your PC." Style="{StaticResource RowDesc}"/>
                                     </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
@@ -882,6 +909,7 @@
 
                         <TextBlock Text="About" Style="{StaticResource SectionTitle}"/>
                         <Border Style="{StaticResource Card}">
+                            <StackPanel>
                             <DockPanel>
                                 <Button x:Name="CheckUpdatesButton" DockPanel.Dock="Right" Style="{StaticResource BaseButton}"
                                         Content="Check for updates" FontWeight="Normal" Click="CheckUpdates_Click"/>
@@ -891,6 +919,20 @@
                                                Text="Savor checks for updates automatically and shows an Update button when one is ready."/>
                                 </StackPanel>
                             </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource BaseButton}" FontWeight="Normal" Click="CopyDiagnostics_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE8C8;" FontSize="12" Margin="0,0,8,0"/>
+                                            <TextBlock x:Name="DiagButtonText" Text="Copy diagnostics"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel>
+                                        <TextBlock Text="Having a problem?" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Copies your Savor version, graphics card, encoder and recent errors, so you can paste them to whoever is helping." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
                         </Border>
                         <TextBlock x:Name="AboutText" Style="{StaticResource Muted}" FontSize="11.5" Margin="4,14,0,0"
                                    Foreground="{StaticResource FaintBrush}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>

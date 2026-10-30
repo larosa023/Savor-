@@ -109,7 +109,12 @@ jobs:
           Start-Sleep 3
 
           # second run: open, go to the tray like the X button does, then press Alt+F10 like a real keyboard
-          Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "Clip *.mp4" -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "*.mp4" -ErrorAction SilentlyContinue | Remove-Item -Force
+          # also record below native size, to test the Resolution setting (CPU resize path on this GPU-less runner)
+          $sf = "$env:APPDATA\Savor\settings.json"
+          $sj = Get-Content $sf -Raw | ConvertFrom-Json
+          $sj | Add-Member -NotePropertyName OutputHeight -NotePropertyValue 720 -Force
+          $sj | ConvertTo-Json -Depth 8 | Out-File $sf -Encoding utf8
           $env:SAVOR_SELFTEST_TRAY = "1"
           $p = Start-Process publish/Savor.exe -PassThru
           Start-Sleep 55
@@ -122,19 +127,24 @@ jobs:
           $line2 | Out-File diag.txt -Append
           [System.Windows.Forms.SendKeys]::SendWait("%{F10}")
           Start-Sleep 12
-          $clips = Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "Clip *.mp4" -ErrorAction SilentlyContinue
+          $clips = Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "*.mp4" -ErrorAction SilentlyContinue
           $ffx = Get-ChildItem "$env:LOCALAPPDATA\Savor\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           if ($clips) {
             foreach ($c in $clips) {
               $info = (& $ffx.FullName -hide_banner -i $c.FullName 2>&1) -join " "
               $dur = if ($info -match "Duration: ([0-9:.]+)") { $Matches[1] } else { "?" }
-              $l = "TRAY CLIP OK: $($c.Name) $([math]::Round($c.Length/1MB,1)) MB, duration $dur"
+              $res = if ($info -match "Video: [^,]+, [^,]+, (\d{2,5}x\d{2,5})") { $Matches[1] } else { "?" }
+              $meta = Get-Content -LiteralPath $c.FullName -Stream savor -ErrorAction SilentlyContinue
+              $l = "TRAY CLIP OK: $($c.Name) $([math]::Round($c.Length/1MB,1)) MB, duration $dur, video $res, info [$($meta -join '; ')]"
               Write-Host "::notice::$l"; $l | Out-File diag.txt -Append
             }
           } else { Write-Host "::warning::TRAY CLIP MISSING"; "TRAY CLIP MISSING" | Out-File diag.txt -Append }
           $stl = "$env:LOCALAPPDATA\Savor\selftest.log"
           if (Test-Path $stl) { Get-Content $stl | ForEach-Object { Write-Host "::notice::tray log: $_" }; Get-Content $stl | Out-File diag.txt -Append; Remove-Item $stl }
           $env:SAVOR_SELFTEST_TRAY = $null
+          $sj = Get-Content $sf -Raw | ConvertFrom-Json
+          $sj.OutputHeight = 0
+          $sj | ConvertTo-Json -Depth 8 | Out-File $sf -Encoding utf8
           Stop-Process -Id $p.Id -Force
           Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           Start-Sleep 3

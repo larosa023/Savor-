@@ -168,6 +168,45 @@ public static class Ffmpeg
     }
 
     /// <param name="live">true for screen capture: keep the CPU encoder's memory small and steady.</param>
+    /// <summary>
+    /// Output size for a "record at 1080p" style setting: same aspect as the display, even numbers.
+    /// Null when recording at the display's own size (setting 0 or not smaller than the display).
+    /// </summary>
+    public static (int W, int H)? OutputSize(DisplayInfo? d, int targetHeight)
+    {
+        if (d == null || targetHeight <= 0 || targetHeight >= d.Height || d.Width <= 0 || d.Height <= 0) return null;
+        int w = (int)Math.Round(d.Width * (double)targetHeight / d.Height / 2) * 2;
+        int h = targetHeight / 2 * 2;
+        return (w, h);
+    }
+
+    /// <summary>
+    /// Video filter including scaling to <paramref name="size"/>. With <paramref name="gpuScale"/> the GPU resizes
+    /// frames before they reach the hardware encoder (no CPU work); otherwise frames are copied to system memory and
+    /// resized there, which works with every encoder.
+    /// </summary>
+    public static string? VideoFilter(EncoderChoice c, (int W, int H)? size, bool gpuScale)
+    {
+        if (size is not { } sz) return VideoFilter(c);
+        bool cpu = c.Def.Vendor == "cpu";
+        string pix = cpu ? "yuv420p" : "nv12";
+        string scale = $"scale={sz.W}:{sz.H}:flags=bicubic";
+        return c.Pipeline switch
+        {
+            CapturePipeline.Gdi => $"{scale},format={pix}",
+            CapturePipeline.DdaDirect when gpuScale && c.Def.Vendor == "intel" => $"scale_d3d11={sz.W}:{sz.H},hwmap=derive_device=qsv,format=qsv",
+            CapturePipeline.DdaDirect when gpuScale => $"scale_d3d11={sz.W}:{sz.H}",
+            _ => $"hwdownload,format=bgra,{scale},format={pix}",
+        };
+    }
+
+    /// <summary>Checks that the GPU can resize frames straight into this encoder (driver dependent).</summary>
+    public static async Task<bool> TestGpuScaleAsync(EncoderChoice c, (int W, int H) size)
+    {
+        if (c.Pipeline != CapturePipeline.DdaDirect) return false;
+        return (await TestAsync(c, VideoFilter(c, size, gpuScale: true))).ok;
+    }
+
     public static List<string> EncoderArgs(EncoderDef e, QualityPreset q, int fps, bool live = true)
     {
         int idx = (int)q; // Low, Medium, High, Ultra
@@ -258,7 +297,7 @@ public static class Ffmpeg
         return working.OrderBy(w => Array.IndexOf(Encoders, w.Def)).ToList();
     }
 
-    static async Task<(bool ok, string err)> TestAsync(EncoderChoice c)
+    static async Task<(bool ok, string err)> TestAsync(EncoderChoice c, string? filterOverride = null)
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin" };
         if (c.Pipeline == CapturePipeline.Gdi)
@@ -266,7 +305,7 @@ public static class Ffmpeg
         else
             args.AddRange(new[] { "-f", "lavfi", "-i", "ddagrab=framerate=30" });
         args.AddRange(new[] { "-frames:v", "8" });
-        var vf = VideoFilter(c);
+        var vf = filterOverride ?? VideoFilter(c);
         if (vf != null) args.AddRange(new[] { "-vf", vf });
         args.AddRange(EncoderArgs(c.Def, QualityPreset.High, 30));
         args.AddRange(new[] { "-f", "null", "-" });

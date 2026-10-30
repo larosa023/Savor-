@@ -71,6 +71,7 @@ public partial class ClipEditor : UserControl
     public void Open(string path, AppSettings settings, Func<EncoderDef?> encoder)
     {
         _path = path;
+        _resume = null;
         _settings = settings;
         _encoder = encoder;
         _opened = false;
@@ -132,6 +133,67 @@ public partial class ClipEditor : UserControl
 
     void Back_Click(object sender, RoutedEventArgs e) => RequestClose();
 
+    // ===================== rename (the title is a text box) =====================
+
+    bool _renaming;
+    (TimeSpan pos, TimeSpan inPt, TimeSpan outPt)? _resume;
+    public event Action<string>? Renamed;
+
+    void Title_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { e.Handled = true; Focus(); } // losing focus saves the name
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            if (_path != null) TitleText.Text = Path.GetFileNameWithoutExtension(_path);
+            Focus();
+        }
+    }
+
+    void Title_LostFocus(object sender, KeyboardFocusChangedEventArgs e) => _ = RenameAsync(TitleText.Text);
+
+    async Task RenameAsync(string name)
+    {
+        if (_path == null || _settings == null || _renaming) return;
+        var current = Path.GetFileNameWithoutExtension(_path);
+        if (!IsVisible)
+        {
+            // leaving the editor while typing: just rename the file, don't reopen it
+            if (name.Trim().Length > 0 && name.Trim() != current)
+                try { var p = _path; var np = await Task.Run(() => Library.Rename(p, name)); Renamed?.Invoke(np); } catch { }
+            return;
+        }
+        if (name.Trim() == current || name.Trim().Length == 0) { TitleText.Text = current; return; }
+        if (IsBusy)
+        {
+            TitleText.Text = current;
+            ShowStatus("Wait for the export to finish, then rename.", error: true);
+            return;
+        }
+        _renaming = true;
+        var pos = Now;
+        var oldPath = _path;
+        string newPath = oldPath;
+        string? error = null;
+        try
+        {
+            // the player keeps the file open, so let go of it while it's renamed
+            Release();
+            try { newPath = await Task.Run(() => Library.Rename(oldPath, name)); }
+            catch (Exception ex) { error = ex.Message; }
+            var trim = (_in, _out);
+            Open(newPath, _settings, _encoder!);
+            _resume = (pos, trim.Item1, trim.Item2);
+            if (error != null) ShowStatus(error, error: true);
+            else
+            {
+                ShowStatus($"Renamed to “{Path.GetFileNameWithoutExtension(newPath)}”.");
+                Renamed?.Invoke(newPath);
+            }
+        }
+        finally { _renaming = false; }
+    }
+
     void RequestClose()
     {
         if (IsBusy) { _exportCts?.Cancel(); return; }
@@ -152,6 +214,13 @@ public partial class ClipEditor : UserControl
         if (!meta.Contains('×')) MetaText.Text = $"{_vw}×{_vh}  ·  {Fmt(_duration)}  ·  {meta}";
         _clockBase = TimeSpan.Zero;
         FlushSeek(TimeSpan.Zero);
+        if (_resume is { } r)
+        {
+            // reopened after a rename: keep the trim and the playhead where they were
+            _resume = null;
+            if (r.outPt > r.inPt && r.outPt <= _duration + TimeSpan.FromMilliseconds(50)) { _in = r.inPt; _out = Clamp(r.outPt, r.inPt, _duration); }
+            Seek(Clamp(r.pos, TimeSpan.Zero, _duration));
+        }
         StartFilmstrip();
         UpdateTimeline();
         UpdateTrimText();
@@ -424,6 +493,8 @@ public partial class ClipEditor : UserControl
 
     void OnKey(object sender, KeyEventArgs e)
     {
+        // typing a name: keys belong to the text box
+        if (e.OriginalSource is TextBox) return;
         // let an open dropdown use the keys; otherwise shortcuts work wherever focus is
         if (e.OriginalSource is ComboBoxItem || e.OriginalSource is ComboBox { IsDropDownOpen: true }) return;
         if (e.OriginalSource is ComboBox && e.Key is Key.Up or Key.Down) return;
@@ -964,6 +1035,7 @@ public partial class ClipEditor : UserControl
 
         var source = _path;
         var output = replace ? source : ClipExporter.NextOutputPath(source);
+        var meta = ClipMeta.Read(source); // the edit keeps its game and clip/recording kind
         var req = new ExportRequest
         {
             Input = source,
@@ -993,6 +1065,7 @@ public partial class ClipEditor : UserControl
         try
         {
             await Task.Run(() => ClipExporter.ExportAsync(req, _encoder?.Invoke(), _settings.Quality, progress, _exportCts.Token));
+            meta?.Write(output);
             ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
             Exported?.Invoke(output);
         }

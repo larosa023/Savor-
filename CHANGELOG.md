@@ -1,5 +1,12 @@
 # What's new in Savor
 
+## 0.7.0 · Oct 30, 2026
+- Clips and recordings are named after the game you're playing, like “VALORANT 2026-10-30 21.14.05”.
+- Filter your captures by game: chips at the top of Captures show each game and how many clips it has.
+- Rename captures: right-click → Rename, or click the clip's name in the viewer and type.
+- Resolution setting (Settings → Capture): record a big screen at 1440p, 1080p or 720p for smaller files and less load on your PC.
+- Copy diagnostics (Settings → About): copies your setup and recent errors in one click, to paste to whoever is helping.
+
 ## 0.6.8 · Oct 29, 2026
 - NVIDIA GPU recording works again on GTX 10-series cards (1060, 1070, 1080 Ti…) and other cards on older drivers. Savor no longer needs NVIDIA driver 610 or newer.
 

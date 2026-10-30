@@ -18,12 +18,13 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 - **App audio tracks** — give up to 5 apps (your game, Discord, Spotify…) their own track, like OBS's Application Audio Capture. Apps opened later are picked up automatically. Leave the list empty to keep just desktop audio. Needs Windows 10 2004 or newer.
 - **Lightweight** — about 50 MB of memory with the window open and about 25 MB in the tray (plus the FFmpeg capture process).
 - **Global hotkeys** that work while you're in a game, and a tray icon so Savor stays out of the way.
-- **Captures library** with thumbnails — right-click to copy the file (paste straight into Discord), show in folder, or delete.
+- **Captures library** with thumbnails — clips are named after the game you're playing and can be filtered by game. Right-click to rename, copy the file (paste straight into Discord), show in folder, or delete.
 - **Built-in viewer & editor** — click any capture to play it inside Savor, trim it (drag handles or I / O), crop it (free, 16:9, 9:16 for Shorts/TikTok, 1:1, 4:3), choose which audio tracks to keep, and export with your GPU encoder. Fast export does lossless trims instantly. Shortcuts: Space play/pause, ← / → step, Shift + ← / → 5 s, Esc back.
 - **Storage limit & low-disk protection** — keep captures under a size you choose; Savor warns when the drive is nearly full and stops a recording safely before it fills up.
 - **What's new** — the clock icon in the top bar lists every update.
 - Quiet notifications that never steal focus from your game, plus an optional save chime.
-- MP4 or MKV output, launch-at-startup, monitor picker, 30–240 fps.
+- MP4 or MKV output, launch-at-startup, monitor picker, 30–240 fps, and an output resolution option (record a 1440p screen at 1080p or 720p).
+- **Copy diagnostics** in Settings → About, for quick troubleshooting.
 
 ## Download
 

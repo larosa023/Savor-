@@ -21,9 +21,17 @@ public sealed class ClipItem : INotifyPropertyChanged
     public required DateTime Created { get; init; }
     public required long Size { get; init; }
 
+    public ClipMeta? Info { get; init; }
+
     public string Name => Path.GetFileNameWithoutExtension(FilePath);
-    public string Kind => Name.StartsWith("Recording", StringComparison.OrdinalIgnoreCase) ? "REC" : "CLIP";
-    public bool IsRecording => Kind == "REC";
+    public string Kind => IsRecording ? "REC" : "CLIP";
+    public bool IsRecording => Info?.IsRecording ?? Name.StartsWith("Recording", StringComparison.OrdinalIgnoreCase);
+    /// <summary>The game it was captured in, if Savor knows.</summary>
+    public string? Game => Info?.Game;
+
+    // inline rename on the library card
+    bool _renaming;
+    public bool IsRenaming { get => _renaming; set { _renaming = value; OnChanged(); } }
     public string Meta => $"{FormatSize(Size)}  ·  {Created.ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture)}";
 
     ImageSource? _thumb;
@@ -50,22 +58,81 @@ public static class Library
     static readonly SemaphoreSlim Gate = new(2);
     static readonly Regex DurationRx = new(@"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", RegexOptions.Compiled);
 
-    public static List<ClipItem> Scan(string folder, int max = 60)
+    // capture info is tiny but read per file; cache it by path + write time
+    static readonly Dictionary<string, (long ticks, ClipMeta? meta)> MetaCache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static List<ClipItem> Scan(string folder, int max = 2000)
     {
         try
         {
             if (!Directory.Exists(folder)) return new();
-            return new DirectoryInfo(folder)
+            var files = new DirectoryInfo(folder)
                 .EnumerateFiles()
                 .Where(f => f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
                             f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(f => f.LastWriteTime)
                 .Take(max)
-                .Select(f => new ClipItem { FilePath = f.FullName, Created = f.LastWriteTime, Size = f.Length })
                 .ToList();
+            var list = new List<ClipItem>(files.Count);
+            lock (MetaCache)
+                foreach (var f in files)
+                {
+                    long ticks = f.LastWriteTimeUtc.Ticks;
+                    if (!MetaCache.TryGetValue(f.FullName, out var c) || c.ticks != ticks)
+                        MetaCache[f.FullName] = c = (ticks, ClipMeta.Read(f.FullName));
+                    list.Add(new ClipItem { FilePath = f.FullName, Created = f.LastWriteTime, Size = f.Length, Info = c.meta });
+                }
+            return list;
         }
         catch { return new(); }
     }
+
+    /// <summary>
+    /// Renames a capture (keeping its extension). Returns the new path. Throws with a friendly message when the name
+    /// can't be used. Savor's info stream and the cached thumbnail move with the file.
+    /// </summary>
+    public static string Rename(string path, string newName)
+    {
+        var name = ClipMeta.SafeFileName(newName ?? "");
+        if (name.Length == 0) throw new InvalidOperationException("Type a name for the capture.");
+        var dir = Path.GetDirectoryName(path)!;
+        var target = Path.Combine(dir, name + Path.GetExtension(path));
+        if (string.Equals(target, path, StringComparison.Ordinal)) return path;
+        bool caseOnly = string.Equals(target, path, StringComparison.OrdinalIgnoreCase);
+        if (!caseOnly && File.Exists(target)) throw new InvalidOperationException($"There's already a capture called “{name}”.");
+
+        string? oldKey = null;
+        try { oldKey = ThumbKey(new FileInfo(path)); } catch { }
+        var meta = ClipMeta.Read(path); // older captures only have it in their name: keep it once renamed
+
+        // the file can be briefly locked right after the viewer lets go of it
+        for (int attempt = 0; ; attempt++)
+        {
+            try { File.Move(path, target); break; }
+            catch (IOException) when (attempt < 10) { Thread.Sleep(150); }
+            catch (IOException) { throw new InvalidOperationException("The file is in use by another app. Close it and try again."); }
+            catch (UnauthorizedAccessException) { throw new InvalidOperationException("Windows didn't allow renaming this file."); }
+        }
+
+        meta?.Write(target);
+        try
+        {
+            if (oldKey != null)
+            {
+                var newKey = ThumbKey(new FileInfo(target));
+                foreach (var ext in new[] { ".jpg", ".txt" })
+                {
+                    var from = Path.Combine(ThumbDir, oldKey + ext);
+                    if (File.Exists(from)) File.Move(from, Path.Combine(ThumbDir, newKey + ext), true);
+                }
+            }
+        }
+        catch { }
+        lock (MetaCache) MetaCache.Remove(path);
+        return target;
+    }
+
+    static string ThumbKey(FileInfo fi) => Hash($"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}");
 
     /// <summary>Loads or generates a cached thumbnail + duration for a clip (on a background thread).</summary>
     public static async Task LoadThumbnailAsync(ClipItem item)
@@ -73,8 +140,7 @@ public static class Library
         string key;
         try
         {
-            var fi = new FileInfo(item.FilePath);
-            key = Hash($"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}");
+            key = ThumbKey(new FileInfo(item.FilePath));
         }
         catch { return; }
 
