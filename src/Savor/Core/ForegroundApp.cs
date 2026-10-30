@@ -18,7 +18,7 @@ public static class ForegroundApp
     {
         "explorer", "shellexperiencehost", "startmenuexperiencehost", "searchhost", "searchapp", "lockapp",
         "textinputhost", "applicationframehost", "dwm", "taskmgr", "systemsettings", "savor", "logonui",
-        "consent", "rundll32", "snippingtool", "screenclippinghost",
+        "consent", "rundll32", "snippingtool", "screenclippinghost", "conhost", "openconsole",
     };
 
     // names that say nothing about the game (engines, runtimes, launch stubs)

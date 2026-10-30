@@ -1,6 +1,6 @@
 # What's new in Savor
 
-## 0.7.0 · Oct 30, 2026
+## 0.7.1 · Oct 30, 2026
 - Clips and recordings are named after the game you're playing, like “VALORANT 2026-10-30 21.14.05”.
 - Filter your captures by game: chips at the top of Captures show each game and how many clips it has.
 - Rename captures: right-click → Rename, or click the clip's name in the viewer and type.

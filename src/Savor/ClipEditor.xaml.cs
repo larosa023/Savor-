@@ -150,6 +150,13 @@ public partial class ClipEditor : UserControl
         }
     }
 
+    void TitlePencil_Click(object sender, MouseButtonEventArgs e)
+    {
+        TitleText.Focus();
+        TitleText.SelectAll();
+        e.Handled = true;
+    }
+
     void Title_LostFocus(object sender, KeyboardFocusChangedEventArgs e) => _ = RenameAsync(TitleText.Text);
 
     async Task RenameAsync(string name)

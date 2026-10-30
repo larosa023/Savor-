@@ -95,9 +95,14 @@
                 </Button>
             </StackPanel>
             <StackPanel VerticalAlignment="Center">
-                <TextBox x:Name="TitleText" Style="{StaticResource InlineEdit}" FontFamily="{StaticResource DisplayFont}" FontSize="17"
-                         FontWeight="SemiBold" Margin="-6,-3,0,-3" HorizontalAlignment="Left" MinWidth="120" MaxWidth="560"
-                         ToolTip="Click to rename" PreviewKeyDown="Title_KeyDown" LostKeyboardFocus="Title_LostFocus"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBox x:Name="TitleText" Style="{StaticResource InlineEdit}" FontFamily="{StaticResource DisplayFont}" FontSize="17"
+                             FontWeight="SemiBold" Margin="-6,-3,0,-3" MinWidth="120" MaxWidth="560"
+                             ToolTip="Click to rename" PreviewKeyDown="Title_KeyDown" LostKeyboardFocus="Title_LostFocus"/>
+                    <TextBlock x:Name="TitlePencil" Style="{StaticResource Icon}" Text="&#xE70F;" FontSize="12" Margin="6,0,0,0"
+                               Foreground="{StaticResource FaintBrush}" Cursor="Hand" ToolTip="Rename"
+                               MouseLeftButtonUp="TitlePencil_Click"/>
+                </StackPanel>
                 <TextBlock x:Name="MetaText" Foreground="{StaticResource FaintBrush}" FontSize="11.5" Margin="0,1,0,0"/>
             </StackPanel>
         </DockPanel>
