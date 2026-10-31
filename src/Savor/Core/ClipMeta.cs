@@ -21,13 +21,23 @@ public sealed record ClipMeta(string Kind, string? Game)
 
     public bool IsRecording => Kind == Recording;
 
+    /// <summary>The game part of a Savor-made name ("VALORANT 2026-10-30 21.14.05" → "VALORANT"), or null.</summary>
+    public static string? StampedPrefix(string name)
+    {
+        var m = Stamped.Match(name);
+        return m.Success ? m.Groups["pre"].Value.Trim() : null;
+    }
+
     public void Write(string path)
     {
         try
         {
             var lines = new List<string> { "kind=" + Kind };
             if (!string.IsNullOrWhiteSpace(Game)) lines.Add("game=" + Game.Replace('\n', ' ').Replace('\r', ' '));
+            // writing the stream counts as modifying the file: keep its date so the library order doesn't change
+            var when = File.GetLastWriteTimeUtc(path);
             File.WriteAllLines(path + Stream, lines);
+            File.SetLastWriteTimeUtc(path, when);
         }
         catch { } // non-NTFS drive: the name still carries the game
     }

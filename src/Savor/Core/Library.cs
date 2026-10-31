@@ -132,6 +132,41 @@ public static class Library
         return target;
     }
 
+    /// <summary>
+    /// Renames a game/app category: retags every capture in it, and renames files that still have Savor's
+    /// automatic name ("Claude 2026-10-31 00.00.12" → "NBA 2026-10-31 00.00.12"). Names the user chose stay as they are.
+    /// Returns how many captures were moved to the new name.
+    /// </summary>
+    public static int RenameGame(string folder, string oldGame, string newGame)
+    {
+        newGame = ClipMeta.SafeFileName(newGame ?? "");
+        if (newGame.Length == 0) throw new InvalidOperationException("Type a name for the category.");
+        int n = 0;
+        foreach (var c in Scan(folder))
+        {
+            if (!string.Equals(c.Game, oldGame, StringComparison.OrdinalIgnoreCase)) continue;
+            var path = c.FilePath;
+            try
+            {
+                new ClipMeta(c.IsRecording ? ClipMeta.Recording : ClipMeta.Clip, newGame).Write(path);
+                var name = Path.GetFileNameWithoutExtension(path);
+                var pre = ClipMeta.StampedPrefix(name);
+                string? newPrefix = null;
+                if (string.Equals(pre, oldGame, StringComparison.OrdinalIgnoreCase)) newPrefix = newGame;
+                else if (string.Equals(pre, oldGame + " Recording", StringComparison.OrdinalIgnoreCase)) newPrefix = newGame + " Recording";
+                if (newPrefix != null)
+                {
+                    var rest = name[pre!.Length..];
+                    try { Rename(path, newPrefix + rest); } catch { } // name taken or file busy: the tag is enough
+                }
+                n++;
+            }
+            catch { }
+        }
+        lock (MetaCache) MetaCache.Clear();
+        return n;
+    }
+
     static string ThumbKey(FileInfo fi) => Hash($"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}");
 
     /// <summary>Loads or generates a cached thumbnail + duration for a clip (on a background thread).</summary>

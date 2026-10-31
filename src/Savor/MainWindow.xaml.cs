@@ -1122,7 +1122,79 @@ public partial class MainWindow : Window
             _gameFilter = game;
             ReloadClips();
         };
+        if (game != null)
+        {
+            // right-click a game to rename it
+            var item = new MenuItem { Header = "Rename" };
+            item.Click += (_, _) => StartCategoryRename(rb, game);
+            rb.ContextMenu = new ContextMenu { Items = { item } };
+            rb.ToolTip = "Right-click to rename";
+        }
         return rb;
+    }
+
+    /// <summary>Swaps the chip for a text box; Enter saves, Esc cancels.</summary>
+    void StartCategoryRename(RadioButton chip, string game)
+    {
+        int idx = GameFilters.Children.IndexOf(chip);
+        if (idx < 0) return;
+        var box = new TextBox
+        {
+            Style = (Style)FindResource("InlineEdit"),
+            Text = game,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            MinWidth = 120,
+            Margin = new Thickness(0, 0, 6, 6),
+            Padding = new Thickness(8, 4, 8, 4),
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        GameFilters.Children[idx] = box;
+        long started = Environment.TickCount64;
+        bool done = false;
+        void Refocus() => Dispatcher.BeginInvoke(() => { box.Focus(); Keyboard.Focus(box); box.SelectAll(); }, DispatcherPriority.ContextIdle);
+        void Finish(bool save)
+        {
+            if (done) return;
+            done = true;
+            if (save) _ = RenameCategoryAsync(game, box.Text);
+            else { _filterSignature = ""; ReloadClips(); }
+        }
+        box.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { e.Handled = true; Finish(true); }
+            else if (e.Key == Key.Escape) { e.Handled = true; Finish(false); }
+        };
+        box.LostKeyboardFocus += (_, _) =>
+        {
+            if (done) return;
+            if (Environment.TickCount64 - started < 400) { Refocus(); return; } // the closing menu took focus for a moment
+            Finish(true);
+        };
+        Refocus();
+    }
+
+    async Task RenameCategoryAsync(string oldName, string newName)
+    {
+        newName = ClipMeta.SafeFileName(newName ?? "");
+        if (newName.Length == 0 || newName == oldName) { _filterSignature = ""; ReloadClips(); return; }
+        try
+        {
+            // future captures from this app use the new name too
+            foreach (var k in _settings.GameAliases.Keys.ToList())
+                if (string.Equals(_settings.GameAliases[k], oldName, StringComparison.OrdinalIgnoreCase)) _settings.GameAliases[k] = newName;
+            if (!_settings.GameAliases.Keys.Any(k => string.Equals(k, oldName, StringComparison.OrdinalIgnoreCase)))
+                _settings.GameAliases[oldName] = newName;
+            _settings.Save();
+
+            var folder = _settings.OutputFolder;
+            int n = await Task.Run(() => Library.RenameGame(folder, oldName, newName));
+            if (string.Equals(_gameFilter, oldName, StringComparison.OrdinalIgnoreCase)) _gameFilter = newName;
+            Notify("Category renamed", $"{oldName} → {newName} ({n} capture{(n == 1 ? "" : "s")}). New captures from it use the new name too.");
+        }
+        catch (Exception ex) { Notify("Couldn't rename", ex.Message, error: true); }
+        _filterSignature = "";
+        ReloadClips();
     }
 
     // ----- rename (right-click → Rename, edited right on the card) -----
@@ -1277,6 +1349,20 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
                 $"meta: renamed to [{Path.GetFileName(renamed)}], kind={m?.Kind}, game={m?.Game}, scan game={scan.FirstOrDefault()?.Game}, " +
                 $"rec={scan.FirstOrDefault()?.IsRecording}, from name: {guess?.Kind}/{guess?.Game}, foreground now: {ForegroundApp.CurrentName() ?? "(none)"}\n");
+            // category rename: auto-named file follows, custom-named file keeps its name, dates unchanged
+            var a = Path.Combine(dir, "Claude 2026-10-31 00.00.12.mp4");
+            var b = Path.Combine(dir, "Curry cross luka.mp4");
+            foreach (var x in new[] { a, b })
+            {
+                File.WriteAllBytes(x, new byte[16]);
+                File.SetLastWriteTimeUtc(x, new DateTime(2026, 10, 31, 4, 0, 12, DateTimeKind.Utc));
+                new ClipMeta(ClipMeta.Clip, "Claude").Write(x);
+            }
+            int moved = Library.RenameGame(dir, "Claude", "NBA");
+            var after = Library.Scan(dir).Where(c => c.Game == "NBA")
+                .Select(c => $"{Path.GetFileName(c.FilePath)}@{File.GetLastWriteTimeUtc(c.FilePath):HH:mm:ss}").OrderBy(x => x);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"category rename: moved {moved} → [{string.Join(", ", after)}]\n");
             Directory.Delete(dir, true);
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "meta: FAILED " + ex.Message + "\n"); }

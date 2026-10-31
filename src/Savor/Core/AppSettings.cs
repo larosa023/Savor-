@@ -115,6 +115,17 @@ public sealed class AppSettings
     public int OutputHeight { get; set; } = 0;
     /// <summary>Results of "can the GPU resize for this encoder" checks, by encoder + size + driver.</summary>
     public Dictionary<string, bool> GpuScaleTests { get; set; } = new();
+    /// <summary>Game/app categories the user renamed: detected name → their name (used for new captures too).</summary>
+    public Dictionary<string, string> GameAliases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The detected app name, or what the user renamed that category to.</summary>
+    public string? GameName(string? detected)
+    {
+        if (detected == null) return null;
+        foreach (var (from, to) in GameAliases) // case-insensitive (the saved dictionary loads case-sensitive)
+            if (string.Equals(from, detected, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(to)) return to;
+        return detected;
+    }
     public QualityPreset Quality { get; set; } = QualityPreset.High;
     public string EncoderId { get; set; } = "auto";
     public bool CaptureCursor { get; set; } = true;

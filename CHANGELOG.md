@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.7.2 · Oct 31, 2026
+- Rename game / app categories: right-click a category at the top of Captures → Rename. Its captures move to the new name, and new captures from that app use it too.
+
 ## 0.7.1 · Oct 30, 2026
 - Clips and recordings are named after the game you're playing, like “VALORANT 2026-10-30 21.14.05”.
 - Filter your captures by game: chips at the top of Captures show each game and how many clips it has.
