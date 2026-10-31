@@ -1203,17 +1203,54 @@ public partial class MainWindow : Window
 
     long _renameStarted;
 
+    // ----- right-click → Game: move a clip to another game / app -----
+
+    void ClipGameMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menu || !ReferenceEquals(e.OriginalSource, menu) || ClipFrom(menu) is not { } c) return;
+        menu.Items.Clear();
+        var games = Library.Scan(_settings.OutputFolder).Where(x => x.Game != null)
+            .GroupBy(x => x.Game!, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Max(x => x.Created)).Select(g => g.First().Game!).ToList();
+        foreach (var g in games)
+        {
+            var item = new MenuItem { Header = g, IsCheckable = false, IsChecked = string.Equals(g, c.Game, StringComparison.OrdinalIgnoreCase) };
+            item.Click += (_, _) => _ = SetClipGameAsync(c, g);
+            menu.Items.Add(item);
+        }
+        if (games.Count > 0) menu.Items.Add(new Separator());
+        var add = new MenuItem { Header = "New game…" };
+        add.Click += (_, _) => { foreach (var o in _clips) o.IsRenaming = false; c.EditingGame = true; c.IsRenaming = true; };
+        menu.Items.Add(add);
+        if (c.Game != null)
+        {
+            var none = new MenuItem { Header = "No game" };
+            none.Click += (_, _) => _ = SetClipGameAsync(c, null);
+            menu.Items.Add(none);
+        }
+    }
+
+    async Task SetClipGameAsync(ClipItem c, string? game)
+    {
+        if (string.Equals(c.Game, game, StringComparison.OrdinalIgnoreCase) && c.Game == game) return;
+        try { await Task.Run(() => Library.SetGame(c, game)); }
+        catch (Exception ex) { Notify("Couldn't change the game", ex.Message, error: true); }
+        ReloadClips();
+    }
+
     void ClipRename_Click(object sender, RoutedEventArgs e)
     {
         if (ClipFrom(sender) is not { } c) return;
         foreach (var other in _clips) if (other != c) other.IsRenaming = false;
+        c.EditingGame = false;
         c.IsRenaming = true;
     }
 
     void RenameBox_VisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (sender is not TextBox box || !box.IsVisible || box.Tag is not ClipItem c) return;
-        box.Text = c.Name;
+        box.Text = c.EditingGame ? c.Game ?? "" : c.Name;
+        box.ToolTip = c.EditingGame ? "Type the game or app name, then press Enter" : null;
         _renameStarted = Environment.TickCount64;
         // after the right-click menu has closed and handed focus back
         Dispatcher.BeginInvoke(() => { box.Focus(); Keyboard.Focus(box); box.SelectAll(); }, DispatcherPriority.ContextIdle);
@@ -1223,7 +1260,7 @@ public partial class MainWindow : Window
     {
         if (sender is not TextBox { Tag: ClipItem c } box) return;
         if (e.Key == Key.Enter) { CommitRename(c, box.Text); e.Handled = true; }
-        else if (e.Key == Key.Escape) { c.IsRenaming = false; e.Handled = true; }
+        else if (e.Key == Key.Escape) { c.IsRenaming = false; c.EditingGame = false; e.Handled = true; }
     }
 
     void RenameBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -1245,6 +1282,12 @@ public partial class MainWindow : Window
     {
         if (!c.IsRenaming) return;
         c.IsRenaming = false;
+        if (c.EditingGame)
+        {
+            c.EditingGame = false;
+            if (name.Trim().Length > 0) _ = SetClipGameAsync(c, name.Trim());
+            return;
+        }
         if (name.Trim() == c.Name) return;
         try
         {
@@ -1360,6 +1403,17 @@ public partial class MainWindow : Window
                 File.SetLastWriteTimeUtc(x, new DateTime(2026, 10, 31, 4, 0, 12, DateTimeKind.Utc));
                 new ClipMeta(ClipMeta.Clip, "Claude").Write(x);
             }
+            // one clip: auto name follows the game, and back to "Clip" with no game
+            var single = Path.Combine(dir, "Clip 2026-10-31 01.00.00.mp4");
+            File.WriteAllBytes(single, new byte[16]);
+            var item1 = Library.Scan(dir).First(x => x.FilePath == single);
+            var p1 = Library.SetGame(item1, "Rocket League");
+            var item2 = Library.Scan(dir).First(x => x.FilePath == p1);
+            var p2 = Library.SetGame(item2, null);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"set game: [{Path.GetFileName(p1)}] game={ClipMeta.Read(p1)?.Game} → none: [{Path.GetFileName(p2)}] game={ClipMeta.Read(p2)?.Game ?? "(none)"}\n");
+            File.Delete(p2);
+
             int moved = Library.RenameGame(dir, "Claude", "NBA");
             var after = Library.Scan(dir).Where(c => c.Game == "NBA")
                 .Select(c => $"{Path.GetFileName(c.FilePath)}@{File.GetLastWriteTimeUtc(c.FilePath):HH:mm:ss}").OrderBy(x => x);
@@ -1368,6 +1422,25 @@ public partial class MainWindow : Window
             Directory.Delete(dir, true);
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "meta: FAILED " + ex.Message + "\n"); }
+
+        // right-click → Game submenu opens with the game list
+        try
+        {
+            var probe = new ClipItem { FilePath = Path.Combine(_settings.OutputFolder, "x.mp4"), Created = DateTime.Now, Size = 1 };
+            var game = new MenuItem { Header = "Game", DataContext = probe };
+            game.Items.Add(new MenuItem { Header = "…" });
+            game.SubmenuOpened += ClipGameMenu_Opened;
+            var cm = new ContextMenu { Items = { game }, PlacementTarget = this, DataContext = probe };
+            cm.IsOpen = true;
+            await Task.Delay(300);
+            game.IsSubmenuOpen = true;
+            await Task.Delay(500);
+            var headers = string.Join(", ", game.Items.OfType<MenuItem>().Select(m => m.Header));
+            bool popup = game.Template?.FindName("PART_Popup", game) is System.Windows.Controls.Primitives.Popup { IsOpen: true };
+            cm.IsOpen = false;
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"game menu: popup open={popup}, items=[{headers}]\n");
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "game menu: FAILED " + ex.Message + "\n"); }
 
         // category rename UI: right-click → Rename swaps the chip for a text box
         try

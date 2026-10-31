@@ -31,6 +31,8 @@ public sealed class ClipItem : INotifyPropertyChanged
 
     // inline rename on the library card
     bool _renaming;
+    /// <summary>The inline box edits the game instead of the file name.</summary>
+    public bool EditingGame { get; set; }
     public bool IsRenaming { get => _renaming; set { _renaming = value; OnChanged(); } }
     public string Meta => $"{FormatSize(Size)}  ·  {Created.ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture)}";
 
@@ -146,25 +148,44 @@ public static class Library
         {
             if (!string.Equals(c.Game, oldGame, StringComparison.OrdinalIgnoreCase)) continue;
             var path = c.FilePath;
-            try
-            {
-                new ClipMeta(c.IsRecording ? ClipMeta.Recording : ClipMeta.Clip, newGame).Write(path);
-                var name = Path.GetFileNameWithoutExtension(path);
-                var pre = ClipMeta.StampedPrefix(name);
-                string? newPrefix = null;
-                if (string.Equals(pre, oldGame, StringComparison.OrdinalIgnoreCase)) newPrefix = newGame;
-                else if (string.Equals(pre, oldGame + " Recording", StringComparison.OrdinalIgnoreCase)) newPrefix = newGame + " Recording";
-                if (newPrefix != null)
-                {
-                    var rest = name[pre!.Length..];
-                    try { Rename(path, newPrefix + rest); } catch { } // name taken or file busy: the tag is enough
-                }
-                n++;
-            }
+            try { Retag(path, c.IsRecording, oldGame, newGame); n++; }
             catch { }
         }
         lock (MetaCache) MetaCache.Clear();
         return n;
+    }
+
+    /// <summary>
+    /// Moves one capture to another game (or to none). A Savor-made name follows along
+    /// ("Claude 2026-10-31 00.00.12" → "NBA 2026-10-31 00.00.12"); a name the user typed is kept. Returns the new path.
+    /// </summary>
+    public static string SetGame(ClipItem c, string? game)
+    {
+        if (game != null)
+        {
+            game = ClipMeta.SafeFileName(game);
+            if (game.Length == 0) game = null;
+        }
+        var path = Retag(c.FilePath, c.IsRecording, c.Game, game);
+        lock (MetaCache) { MetaCache.Remove(c.FilePath); MetaCache.Remove(path); }
+        return path;
+    }
+
+    static string Retag(string path, bool recording, string? oldGame, string? newGame)
+    {
+        new ClipMeta(recording ? ClipMeta.Recording : ClipMeta.Clip, newGame).Write(path);
+        var name = Path.GetFileNameWithoutExtension(path);
+        var pre = ClipMeta.StampedPrefix(name);
+        if (pre == null) return path; // the user's own name: leave it
+        string oldPrefix = recording
+            ? (oldGame != null ? oldGame + " Recording" : "Recording")
+            : (oldGame ?? "Clip");
+        if (!string.Equals(pre, oldPrefix, StringComparison.OrdinalIgnoreCase)) return path;
+        string newPrefix = recording
+            ? (newGame != null ? newGame + " Recording" : "Recording")
+            : (newGame ?? "Clip");
+        try { return Rename(path, newPrefix + name[pre.Length..]); }
+        catch { return path; } // name taken or file busy: the tag is enough
     }
 
     static string ThumbKey(FileInfo fi) => Hash($"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}");

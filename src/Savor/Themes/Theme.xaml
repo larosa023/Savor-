@@ -424,14 +424,51 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
-                    <Border x:Name="Bd" Padding="10,7" CornerRadius="6" Background="Transparent">
-                        <ContentPresenter ContentSource="Header"/>
-                    </Border>
+                    <Grid>
+                        <Border x:Name="Bd" Padding="10,7" CornerRadius="6" Background="Transparent">
+                            <DockPanel>
+                                <TextBlock x:Name="Check" DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE73E;" FontSize="11"
+                                           Margin="0,0,8,0" Foreground="{StaticResource AccentBrush}" Visibility="Collapsed"/>
+                                <TextBlock x:Name="Arrow" DockPanel.Dock="Right" Style="{StaticResource Icon}" Text="&#xE76C;" FontSize="10"
+                                           Margin="18,0,0,0" Foreground="{StaticResource MutedBrush}" Visibility="Collapsed"/>
+                                <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+                            </DockPanel>
+                        </Border>
+                        <!-- submenus (e.g. right-click → Game) -->
+                        <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="6" VerticalOffset="-5"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                            <Border Background="{StaticResource Surface2Brush}" BorderBrush="#33353B" BorderThickness="1"
+                                    CornerRadius="10" Padding="4" MinWidth="180">
+                                <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface3Brush}"/>
                         </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="Role" Value="SubmenuHeader">
+                            <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="Role" Value="TopLevelHeader">
+                            <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
+                        </Trigger>
                     </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Margin="8,4" Background="{StaticResource LineBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

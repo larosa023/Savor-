@@ -95,6 +95,9 @@
                     <ContextMenu>
                         <MenuItem Header="View &amp; edit" Click="ClipOpen_Click"/>
                         <MenuItem Header="Rename" Click="ClipRename_Click"/>
+                        <MenuItem Header="Game" SubmenuOpened="ClipGameMenu_Opened">
+                            <MenuItem Header="…"/>
+                        </MenuItem>
                         <MenuItem Header="Open in default player" Click="ClipExternal_Click"/>
                         <MenuItem Header="Show in folder" Click="ClipReveal_Click"/>
                         <MenuItem Header="Copy file" Click="ClipCopy_Click"/>

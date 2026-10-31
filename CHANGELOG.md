@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.7.4 · Oct 31, 2026
+- Change a clip's game: right-click a capture → Game, then pick one of your games, “New game…”, or “No game”.
+
 ## 0.7.3 · Oct 31, 2026
 - Fixed an error popup when renaming a game category.
 
