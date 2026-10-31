@@ -62,7 +62,20 @@ public sealed class AudioMixer : IDisposable
     /// Fixed for the life of the mixer (ffmpeg's input layout depends on it).
     /// </summary>
     public bool SeparateTracks { get; init; }
-    public int OutputChannels => TrackNames.Count * 2;
+
+    /// <summary>
+    /// Mic noise suppression is done by ffmpeg, so the mic is sent on its own and mixed in there:
+    /// the Mix slot then carries everything except the mic, and the mic always has a slot (MicSlot).
+    /// </summary>
+    public bool MicMixedLater { get; init; }
+
+    /// <summary>Stereo pairs sent to ffmpeg: one per output track, plus a hidden mic pair when needed.</summary>
+    public int InputSlots => TrackNames.Count + (MicMixedLater && _micConfigured && _micTrack < 0 ? 1 : 0);
+    /// <summary>Which input pair holds the mic (−1 when it isn't sent separately).</summary>
+    public int MicSlot => !(MicMixedLater && _micConfigured) ? -1 : (TrackNames.Count > 0 && _micTrack > 0 ? _micTrack : TrackNames.Count);
+    /// <summary>True when the mic slot is also an output track (otherwise it only feeds the mix).</summary>
+    public bool MicIsTrack => TrackNames.Count > 0 && _micTrack > 0;
+    public int OutputChannels => InputSlots * 2;
 
     string[]? _trackNames;
     int _deskTrack = -1, _micTrack = -1;
@@ -327,6 +340,8 @@ public sealed class AudioMixer : IDisposable
             if (a.Level > a.Max) a.Max = a.Level;
         }
 
+        bool micLater = MicSlot >= 0;            // mic goes to ffmpeg on its own (noise suppression)
+        int micSlot = micLater ? MicSlot : _micTrack;
         for (int i = 0; i < n; i++)
         {
             float d = _desk[i] * dv;
@@ -337,9 +352,9 @@ public sealed class AudioMixer : IDisposable
             int frame = i >> 1, side = i & 1, o = frame * ch + side;
             // desktop audio already contains every app; with desktop off, the mix is built from the chosen apps
             float baseMix = DesktopEnabled ? d : SumApps(i);
-            _out[o] = Clip(baseMix + m);
+            _out[o] = Clip(micLater ? baseMix : baseMix + m);
             if (_deskTrack > 0) _out[o + _deskTrack * 2] = Clip(d);
-            if (_micTrack > 0) _out[o + _micTrack * 2] = Clip(m);
+            if (micSlot > 0) _out[o + micSlot * 2] = Clip(m);
         }
         DesktopLevel = Math.Min(1f, dPeak);
         MicLevel = Math.Min(1f, mPeak);

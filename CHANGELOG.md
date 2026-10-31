@@ -1,5 +1,14 @@
 # What's new in Savor
 
+## 0.8.0 · Oct 31, 2026
+- Drag captures straight out of Savor into Discord, a browser or a folder.
+- Search captures by name or game (top of Captures).
+- Select several captures with Ctrl or Shift + click (Ctrl + A for all), then move them to a game, join, copy or delete them together.
+- Hover a capture to see a quick preview of what's in it.
+- Editor: export as a GIF, and change the speed (0.25× to 2×).
+- Join clips: select two or more and press Join to make one video, oldest first.
+- Mic noise suppression (Settings → Audio): removes keyboard clicks, fans and background hum from your mic.
+
 ## 0.7.4 · Oct 31, 2026
 - Change a clip's game: right-click a capture → Game, then pick one of your games, “New game…”, or “No game”.
 

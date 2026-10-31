@@ -55,6 +55,7 @@ public partial class ClipEditor : UserControl
     public event Action<string>? Exported;
 
     public bool IsBusy => _exportCts != null;
+    public string? CurrentPath => _path;
     readonly bool _ready;
 
     public ClipEditor()
@@ -578,7 +579,7 @@ public partial class ClipEditor : UserControl
         OutText.Text = Fmt(_out);
         LenText.Text = Fmt(_out - _in);
         bool trimmed = _in > TimeSpan.Zero || _out < _duration - TimeSpan.FromMilliseconds(50);
-        ExportText.Text = trimmed || _cropMode != "none" ? "Export" : "Export copy";
+        ExportText.Text = IsGif ? "Export GIF" : trimmed || _cropMode != "none" ? "Export" : "Export copy";
     }
 
     const double Pad = 18; // room for the handles at both ends
@@ -842,7 +843,7 @@ public partial class ClipEditor : UserControl
             }
         }
         CropLayer.Visibility = mode == "none" ? Visibility.Collapsed : Visibility.Visible;
-        FastToggle.IsEnabled = mode == "none";
+        FastToggle.IsEnabled = mode == "none" && !IsGif && Math.Abs(ExportSpeed - 1) < 0.001;
         if (mode != "none") FastToggle.IsChecked = false;
         if (mode != "none") { Pause(); BigPlay.Visibility = Visibility.Collapsed; }
         LayoutCrop();
@@ -1011,6 +1012,24 @@ public partial class ClipEditor : UserControl
 
     void Fast_Click(object sender, RoutedEventArgs e) { }
 
+    bool IsGif => FormatCombo?.SelectedItem is ComboBoxItem { Tag: "gif" };
+
+    double ExportSpeed => SpeedPanel?.Children.OfType<RadioButton>().FirstOrDefault(r => r.IsChecked == true)?.Tag is string t &&
+                          double.TryParse(t, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1;
+
+    /// <summary>GIF and speed changes need re-encoding (no fast export) and never replace the original.</summary>
+    void ExportOptions_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || FastToggle == null) return;
+        bool reencode = IsGif || Math.Abs(ExportSpeed - 1) > 0.001;
+        FastToggle.IsEnabled = !reencode && _cropMode == "none";
+        if (reencode) FastToggle.IsChecked = false;
+        SaveModeCombo.IsEnabled = !IsGif;
+        if (IsGif) SaveModeCombo.SelectedIndex = 0;
+        SpeedNote.Visibility = Math.Abs(ExportSpeed - 1) > 0.001 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateTrimText();
+    }
+
 
     async void Export_Click(object sender, RoutedEventArgs e)
     {
@@ -1022,7 +1041,9 @@ public partial class ClipEditor : UserControl
             return;
         }
 
-        bool replace = SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
+        bool gif = IsGif;
+        double speed = ExportSpeed;
+        bool replace = !gif && SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
         var audioTag = (AudioCombo.SelectedItem as ComboBoxItem)?.Tag as string;
         var audio = audioTag switch
         {
@@ -1041,7 +1062,7 @@ public partial class ClipEditor : UserControl
         }
 
         var source = _path;
-        var output = replace ? source : ClipExporter.NextOutputPath(source);
+        var output = replace ? source : ClipExporter.NextOutputPath(source, gif ? ".gif" : null);
         var meta = ClipMeta.Read(source); // the edit keeps its game and clip/recording kind
         var req = new ExportRequest
         {
@@ -1052,7 +1073,9 @@ public partial class ClipEditor : UserControl
             Crop = crop,
             Audio = audio == AudioExport.Selected && _listen.Count == 0 ? AudioExport.None : audio,
             Tracks = _listen.ToArray(),
-            Fast = FastToggle.IsChecked == true && crop == null,
+            Fast = FastToggle.IsChecked == true && crop == null && !gif && Math.Abs(speed - 1) < 0.001,
+            Speed = speed,
+            Gif = gif,
         };
 
         Pause();
@@ -1072,9 +1095,18 @@ public partial class ClipEditor : UserControl
         try
         {
             await Task.Run(() => ClipExporter.ExportAsync(req, _encoder?.Invoke(), _settings.Quality, progress, _exportCts.Token));
-            meta?.Write(output);
-            ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
-            Exported?.Invoke(output);
+            if (gif)
+            {
+                // GIFs aren't shown in the library: point straight at the file
+                ShowStatus($"Saved GIF “{Path.GetFileName(output)}”.");
+                try { Process.Start("explorer.exe", $"/select,\"{output}\""); } catch { }
+            }
+            else
+            {
+                meta?.Write(output);
+                ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
+                Exported?.Invoke(output);
+            }
         }
         catch (OperationCanceledException) { ShowStatus("Export cancelled."); }
         catch (Exception ex) { ShowStatus(ex.Message, error: true); }
@@ -1083,6 +1115,7 @@ public partial class ClipEditor : UserControl
             _exportCts.Dispose();
             _exportCts = null;
             ExportProgress.Visibility = Visibility.Collapsed;
+            ExportText.Text = IsGif ? "Export GIF" : "Export";
             UpdateTrimText();
             if (replace && _path != null)
             {

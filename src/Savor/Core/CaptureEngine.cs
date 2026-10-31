@@ -60,6 +60,8 @@ public sealed class CaptureEngine : IDisposable
     public bool IsRunning => _proc is { HasExited: false };
     public AudioMixer? Mixer => _mixer;
     string[] _trackNames = Array.Empty<string>();
+    int _inputSlots, _micSlot = -1; // stereo pairs sent to ffmpeg, and which one is the mic (noise suppression)
+    bool _micIsTrack;
     /// <summary>Audio tracks in the current capture, in file order.</summary>
     public IReadOnlyList<string> TrackNames => _trackNames;
 
@@ -250,6 +252,7 @@ public sealed class CaptureEngine : IDisposable
                                         s.SeparateAudioTracks ? s.AppTracks : null)
                 {
                     SeparateTracks = s.SeparateAudioTracks,
+                    MicMixedLater = s.MicNoiseSuppression && !string.IsNullOrEmpty(s.MicDeviceId) && NoiseModel.Directory != null,
                     DesktopMuted = s.DesktopMuted,
                     MicMuted = s.MicMuted,
                 };
@@ -270,8 +273,12 @@ public sealed class CaptureEngine : IDisposable
 
         // ---- ffmpeg ----
         _trackNames = audio && _mixer != null ? _mixer.TrackNames.ToArray() : Array.Empty<string>();
+        _inputSlots = audio && _mixer != null ? _mixer.InputSlots : 0;
+        _micSlot = audio && _mixer != null ? _mixer.MicSlot : -1;
+        _micIsTrack = audio && _mixer != null && _mixer.MicIsTrack;
         var args = BuildArgs(s, enc, audio, rate);
         var p = new Process { StartInfo = Ffmpeg.StartInfo(args, redirectInput: true), EnableRaisingEvents = true };
+        if (_micSlot >= 0 && NoiseModel.Directory is { } nd) p.StartInfo.WorkingDirectory = nd; // arnndn finds its model here
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) AddLog(e.Data!); };
         p.OutputDataReceived += (_, _) => { };
         p.Exited += OnProcessExited;
@@ -301,6 +308,21 @@ public sealed class CaptureEngine : IDisposable
         StartedUtc = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// Audio graph for mic noise suppression: splits the interleaved input into stereo pairs, runs RNNoise on the
+    /// mic pair and mixes the cleaned mic into track 1. Outputs [a0] (mix), [mt] (mic track, if any) and [r{n}].
+    /// </summary>
+    public static string DenoiseGraph(int slots, int micSlot, bool micIsTrack, string input = "[1:a]")
+    {
+        var fc = new System.Text.StringBuilder($"{input}asplit={slots}");
+        for (int t = 0; t < slots; t++) fc.Append($"[s{t}]");
+        for (int t = 0; t < slots; t++) fc.Append($";[s{t}]pan=stereo|c0=c{t * 2}|c1=c{t * 2 + 1},aresample=48000[r{t}]");
+        fc.Append($";[r{micSlot}]arnndn=m={NoiseModel.FileName}");
+        fc.Append(micIsTrack ? ",asplit=2[mt][mm]" : "[mm]");
+        fc.Append(";[r0][mm]amix=inputs=2:normalize=0:duration=first[a0]");
+        return fc.ToString();
+    }
+
     List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate)
     {
         var d = Display;
@@ -324,12 +346,20 @@ public sealed class CaptureEngine : IDisposable
 
         if (audio)
         {
-            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", (_trackNames.Length * 2).ToString(),
+            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", (Math.Max(_inputSlots, _trackNames.Length) * 2).ToString(),
                                "-i", "pipe:0" });
         }
 
         int tracks = audio ? Math.Max(1, _trackNames.Length) : 0;
-        if (tracks > 1)
+        if (audio && _micSlot > 0)
+        {
+            // noise suppression: clean the mic with RNNoise, then mix it into track 1 here
+            a.AddRange(new[] { "-filter_complex", DenoiseGraph(_inputSlots, _micSlot, _micIsTrack) });
+            a.AddRange(new[] { "-map", "0:v" });
+            for (int t = 0; t < tracks; t++)
+                a.AddRange(new[] { "-map", t == 0 ? "[a0]" : t == _micSlot ? "[mt]" : $"[r{t}]" });
+        }
+        else if (tracks > 1)
         {
             // split the interleaved 6-channel input into one stereo stream per track
             var fc = new System.Text.StringBuilder($"[1:a]asplit={tracks}");
@@ -337,9 +367,12 @@ public sealed class CaptureEngine : IDisposable
             for (int t = 0; t < tracks; t++) fc.Append($";[s{t}]pan=stereo|c0=c{t * 2}|c1=c{t * 2 + 1}[a{t}]");
             a.AddRange(new[] { "-filter_complex", fc.ToString() });
         }
-        a.AddRange(new[] { "-map", "0:v" });
-        if (tracks == 1) a.AddRange(new[] { "-map", "1:a" });
-        for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
+        if (!(audio && _micSlot > 0))
+        {
+            a.AddRange(new[] { "-map", "0:v" });
+            if (tracks == 1) a.AddRange(new[] { "-map", "1:a" });
+            for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
+        }
 
         var vf = Ffmpeg.VideoFilter(enc, Ffmpeg.OutputSize(d, s.OutputHeight), GpuScale);
         if (vf != null) a.AddRange(new[] { "-vf", vf });

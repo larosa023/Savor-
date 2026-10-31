@@ -1069,7 +1069,10 @@ public partial class MainWindow : Window
         }
         var all = Library.Scan(_settings.OutputFolder);
         BuildGameFilters(all);
+        var q = SearchBox?.Text.Trim() ?? "";
         var items = all.Where(c => _gameFilter == null || string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase))
+                       .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                                   (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
                        .Take(MaxCards).ToList();
         var known = _clips.ToDictionary(c => c.FilePath + c.Size, c => c);
         _clips.Clear();
@@ -1079,8 +1082,188 @@ public partial class MainWindow : Window
             _clips.Add(it);
             _ = Library.LoadThumbnailAsync(it);
         }
+        // keep the selection for captures still shown
+        _selected.IntersectWith(_clips.Select(c => c.FilePath));
+        foreach (var c in _clips) c.IsSelected = _selected.Contains(c.FilePath);
+        UpdateSelectionBar();
+
         EmptyState.Visibility = _clips.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        bool searching = q.Length > 0 && all.Count > 0;
+        EmptyTitle.Text = searching ? "No matches" : "Nothing captured yet";
+        EmptyHint.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
         ClipCount.Text = all.Count == 0 ? "" : all.Count.ToString();
+    }
+
+    // ----- search -----
+
+    DispatcherTimer? _searchTimer;
+
+    void Search_Changed(object sender, TextChangedEventArgs e)
+    {
+        SearchHint.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _searchTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(160), DispatcherPriority.Background,
+            (_, _) => { _searchTimer!.Stop(); ReloadClips(); }, Dispatcher);
+        _searchTimer.Stop();
+        _searchTimer.Start();
+    }
+
+    void Search_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && SearchBox.Text.Length > 0) { SearchBox.Text = ""; e.Handled = true; }
+    }
+
+    // ----- selection (Ctrl / Shift + click) and bulk actions -----
+
+    readonly HashSet<string> _selected = new(StringComparer.OrdinalIgnoreCase);
+    ClipItem? _anchor;
+
+    void SetSelected(ClipItem c, bool on)
+    {
+        c.IsSelected = on;
+        if (on) _selected.Add(c.FilePath); else _selected.Remove(c.FilePath);
+    }
+
+    void ClearSelection()
+    {
+        foreach (var c in _clips) c.IsSelected = false;
+        _selected.Clear();
+        _anchor = null;
+        UpdateSelectionBar();
+    }
+
+    List<ClipItem> SelectedClips() => _clips.Where(c => c.IsSelected).ToList();
+
+    void UpdateSelectionBar()
+    {
+        int n = _selected.Count;
+        if (_joining) return;
+        SelectionBar.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
+        SelectionText.Text = n == 1 ? "1 selected" : $"{n} selected";
+        SelJoinButton.IsEnabled = n >= 2;
+        if (n == 0) SelGameBox.Visibility = Visibility.Collapsed;
+    }
+
+    void SelClear_Click(object sender, RoutedEventArgs e) => ClearSelection();
+
+    void SelCopy_Click(object sender, RoutedEventArgs e)
+    {
+        var files = SelectedClips().Select(c => c.FilePath).ToArray();
+        if (files.Length == 0) return;
+        try
+        {
+            var list = new System.Collections.Specialized.StringCollection();
+            list.AddRange(files);
+            Clipboard.SetFileDropList(list);
+            Notify("Copied", $"{files.Length} capture{(files.Length == 1 ? "" : "s")} — paste into Discord, a chat, or a folder.");
+        }
+        catch { }
+    }
+
+    void SelDelete_Click(object sender, RoutedEventArgs e)
+    {
+        var sel = SelectedClips();
+        int done = 0;
+        foreach (var c in sel)
+        {
+            try
+            {
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(c.FilePath,
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                done++;
+            }
+            catch { }
+        }
+        ClearSelection();
+        ReloadClips();
+        if (done > 0) Notify("Deleted", $"{done} capture{(done == 1 ? "" : "s")} moved to the Recycle Bin.");
+    }
+
+    void SelGame_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu { PlacementTarget = SelGameButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Top };
+        foreach (var g in KnownGames())
+        {
+            var item = new MenuItem { Header = g };
+            item.Click += (_, _) => _ = SetGameForSelectionAsync(g);
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+        var add = new MenuItem { Header = "New game…" };
+        add.Click += (_, _) =>
+        {
+            SelGameBox.Text = "";
+            SelGameBox.Visibility = Visibility.Visible;
+            _renameStarted = Environment.TickCount64;
+            Dispatcher.BeginInvoke(() => { SelGameBox.Focus(); Keyboard.Focus(SelGameBox); }, DispatcherPriority.ContextIdle);
+        };
+        menu.Items.Add(add);
+        var none = new MenuItem { Header = "No game" };
+        none.Click += (_, _) => _ = SetGameForSelectionAsync(null);
+        menu.Items.Add(none);
+        menu.IsOpen = true;
+    }
+
+    void SelGameBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            var g = SelGameBox.Text.Trim();
+            SelGameBox.Visibility = Visibility.Collapsed;
+            if (g.Length > 0) _ = SetGameForSelectionAsync(g);
+        }
+        else if (e.Key == Key.Escape) { e.Handled = true; SelGameBox.Visibility = Visibility.Collapsed; }
+    }
+
+    void SelGameBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (SelGameBox.Visibility != Visibility.Visible) return;
+        if (Environment.TickCount64 - _renameStarted < 400)
+        {
+            Dispatcher.BeginInvoke(() => { SelGameBox.Focus(); Keyboard.Focus(SelGameBox); }, DispatcherPriority.ContextIdle);
+            return;
+        }
+        SelGameBox.Visibility = Visibility.Collapsed;
+    }
+
+    List<string> KnownGames() => Library.Scan(_settings.OutputFolder).Where(x => x.Game != null)
+        .GroupBy(x => x.Game!, StringComparer.OrdinalIgnoreCase)
+        .OrderByDescending(g => g.Max(x => x.Created)).Select(g => g.First().Game!).ToList();
+
+    async Task SetGameForSelectionAsync(string? game)
+    {
+        var sel = SelectedClips();
+        try { await Task.Run(() => { foreach (var c in sel) Library.SetGame(c, game); }); }
+        catch (Exception ex) { Notify("Couldn't change the game", ex.Message, error: true); }
+        ClearSelection();
+        _filterSignature = "";
+        ReloadClips();
+        Notify("Moved", $"{sel.Count} capture{(sel.Count == 1 ? "" : "s")} → {game ?? "no game"}");
+    }
+
+    bool _joining;
+
+    async void SelJoin_Click(object sender, RoutedEventArgs e)
+    {
+        var sel = SelectedClips().OrderBy(c => c.Created).ToList();
+        if (sel.Count < 2 || _joining) return;
+        _joining = true;
+        SelJoinButton.IsEnabled = false;
+        try
+        {
+            var progress = new Progress<double>(p => SelectionText.Text = $"Joining… {p * 100:0}%");
+            SelectionText.Text = "Joining…";
+            var output = await Task.Run(() => ClipJoiner.JoinAsync(sel.Select(c => c.FilePath).ToList(),
+                _engine.Encoder?.Def, _settings.Quality, progress, CancellationToken.None));
+            // the joined video belongs to the first clip's game
+            new ClipMeta(ClipMeta.Clip, ClipMeta.Read(sel[0].FilePath)?.Game).Write(output);
+            Notify("Joined", $"{sel.Count} clips → {Path.GetFileName(output)}");
+            _joining = false;
+            ClearSelection();
+        }
+        catch (Exception ex) { Notify("Couldn't join", ex.Message, error: true); }
+        finally { _joining = false; ReloadClips(); }
     }
 
     /// <summary>"All · Valorant 12 · Minecraft 3" chips; only shown once some captures have a game.</summary>
@@ -1299,7 +1482,110 @@ public partial class MainWindow : Window
 
     static ClipItem? ClipFrom(object sender) => (sender as FrameworkElement)?.DataContext as ClipItem;
 
-    void ClipCard_Click(object sender, MouseButtonEventArgs e) { if (ClipFrom(sender) is { IsRenaming: false } c) OpenEditor(c.FilePath); }
+    // ----- card mouse: click opens / selects, drag copies the file out, hover previews -----
+
+    Point _downPoint;
+    ClipItem? _downClip;
+    bool _dragged;
+
+    void Card_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _downClip = ClipFrom(sender);
+        _downPoint = e.GetPosition(this);
+        _dragged = false;
+    }
+
+    void Card_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _downClip is not { IsRenaming: false } c || _dragged) return;
+        var d = e.GetPosition(this) - _downPoint;
+        if (Math.Abs(d.X) < SystemParameters.MinimumHorizontalDragDistance * 2 &&
+            Math.Abs(d.Y) < SystemParameters.MinimumVerticalDragDistance * 2) return;
+        _dragged = true;
+        StopHover();
+        // drag the whole selection if this card is part of it
+        var files = (c.IsSelected ? SelectedClips() : new List<ClipItem> { c })
+            .Select(x => x.FilePath).Where(File.Exists).ToArray();
+        if (files.Length == 0) return;
+        try
+        {
+            var data = new DataObject(DataFormats.FileDrop, files);
+            DragDrop.DoDragDrop((DependencyObject)sender, data, DragDropEffects.Copy); // copy only: never move it out of the library
+        }
+        catch { }
+        _downClip = null;
+    }
+
+    void ClipCard_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (ClipFrom(sender) is not { IsRenaming: false } c) return;
+        if (_dragged) { _dragged = false; return; }
+        var mods = Keyboard.Modifiers;
+        if (mods.HasFlag(ModifierKeys.Shift) && _anchor != null && _clips.Contains(_anchor))
+        {
+            int a = _clips.IndexOf(_anchor), b = _clips.IndexOf(c);
+            for (int i = Math.Min(a, b); i <= Math.Max(a, b); i++) SetSelected(_clips[i], true);
+        }
+        else if (mods.HasFlag(ModifierKeys.Control) || mods.HasFlag(ModifierKeys.Shift) || _selected.Count > 0)
+        {
+            // while some are selected, a click adds / removes instead of opening
+            SetSelected(c, !c.IsSelected);
+            _anchor = c;
+        }
+        else
+        {
+            OpenEditor(c.FilePath);
+            return;
+        }
+        UpdateSelectionBar();
+    }
+
+    ClipItem? _hoverClip;
+    BitmapSource[]? _hoverFrames;
+    int _hoverIndex;
+    CancellationTokenSource? _hoverCts;
+    DispatcherTimer? _hoverTimer;
+
+    async void Card_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (ClipFrom(sender) is not { } c || e.LeftButton == MouseButtonState.Pressed) return;
+        StopHover();
+        _hoverClip = c;
+        var cts = _hoverCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(350, cts.Token); // only when the mouse rests on a card
+            var frames = await Library.LoadPreviewFramesAsync(c, cts.Token);
+            if (cts.IsCancellationRequested || frames == null || frames.Length == 0 || _hoverClip != c) return;
+            _hoverFrames = frames;
+            _hoverIndex = 0;
+            c.HoverFrame = frames[0];
+            _hoverTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(420), DispatcherPriority.Background, (_, _) =>
+            {
+                if (_hoverClip == null || _hoverFrames == null) { _hoverTimer!.Stop(); return; }
+                _hoverIndex = (_hoverIndex + 1) % _hoverFrames.Length;
+                _hoverClip.HoverFrame = _hoverFrames[_hoverIndex];
+            }, Dispatcher);
+            _hoverTimer.Start();
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
+    void Card_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (ClipFrom(sender) == _hoverClip) StopHover();
+    }
+
+    void StopHover()
+    {
+        _hoverCts?.Cancel();
+        _hoverCts = null;
+        _hoverTimer?.Stop();
+        if (_hoverClip != null) _hoverClip.HoverFrame = null;
+        _hoverClip = null;
+        _hoverFrames = null; // frames are small and freed with this
+    }
     void ClipOpen_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenEditor(c.FilePath); }
     void ClipExternal_Click(object sender, RoutedEventArgs e) { if (ClipFrom(sender) is { } c) OpenFile(c.FilePath); }
 
@@ -1342,6 +1628,94 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), result + "\n");
         }
         catch { }
+    }
+
+    /// <summary>CI only: GIF / speed export, joining, hover frames, search and selection.</summary>
+    async Task<string> SelfTestLibraryAsync()
+    {
+        var src = _editor?.CurrentPath;
+        if (src == null || !File.Exists(src)) return "library: no test clip";
+        var sb = new System.Text.StringBuilder();
+        var dir = Path.Combine(AppSettings.LocalDataDir, "export-test");
+        Directory.CreateDirectory(dir);
+        async Task<string> Dur(string f)
+        {
+            var (_, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", f }, TimeSpan.FromSeconds(10));
+            var m = System.Text.RegularExpressions.Regex.Match(err, @"Duration: ([\d:.]+)");
+            var v = System.Text.RegularExpressions.Regex.Match(err, @"Video: (\w+)[^\n]*?, (\d+x\d+)");
+            int aud = System.Text.RegularExpressions.Regex.Matches(err, "Audio:").Count;
+            return $"{(m.Success ? m.Groups[1].Value : "?")} {v.Groups[1].Value} {v.Groups[2].Value} audio×{aud}";
+        }
+        var enc = _engine.Encoder?.Def;
+        var gif = Path.Combine(dir, "t.gif");
+        await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = gif, Start = TimeSpan.FromSeconds(1), End = TimeSpan.FromSeconds(4), Gif = true, Speed = 0.5 },
+            enc, _settings.Quality, null, CancellationToken.None);
+        sb.Append($"gif 3s@0.5×: {await Dur(gif)}; ");
+        var fast = Path.Combine(dir, "fast.mp4");
+        await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = fast, Start = TimeSpan.FromSeconds(2), End = TimeSpan.FromSeconds(10), Speed = 2 },
+            enc, _settings.Quality, null, CancellationToken.None);
+        sb.Append($"mp4 8s@2×: {await Dur(fast)}; ");
+        var slow = Path.Combine(dir, "slow.mp4");
+        await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = slow, Start = TimeSpan.FromSeconds(2), End = TimeSpan.FromSeconds(4), Speed = 0.25,
+            Audio = AudioExport.Selected, Tracks = new[] { 0, 1 } }, enc, _settings.Quality, null, CancellationToken.None);
+        sb.Append($"mp4 2s@0.25× mixed: {await Dur(slow)}; ");
+
+        // short 3 s pieces keep the join test quick
+        var copy1 = Path.Combine(dir, "a.mp4");
+        await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = copy1, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(3), Fast = true },
+            enc, _settings.Quality, null, CancellationToken.None);
+        var copy2 = Path.Combine(dir, "b.mp4"); File.Copy(copy1, copy2);
+        var joined = await ClipJoiner.JoinAsync(new List<string> { copy1, copy2 }, enc, _settings.Quality, null, CancellationToken.None);
+        sb.Append($"join same: {await Dur(joined)}; ");
+        var mixed = await ClipJoiner.JoinAsync(new List<string> { copy1, gif }, enc, _settings.Quality, null, CancellationToken.None);
+        sb.Append($"join different: {await Dur(mixed)}; ");
+
+        var item = Library.Scan(dir).First(c => c.FilePath == copy1);
+        await Library.LoadThumbnailAsync(item);
+        var frames = await Library.LoadPreviewFramesAsync(item, CancellationToken.None);
+        sb.Append($"hover frames: {frames?.Length ?? 0} ({frames?[0].PixelWidth}×{frames?[0].PixelHeight}); ");
+        Directory.Delete(dir, true);
+
+        // search + selection on the real Captures list
+        ReloadClips();
+        int before = _clips.Count;
+        SearchBox.Text = "zzzz-no-match";
+        await Task.Delay(500);
+        int during = _clips.Count;
+        string title = EmptyTitle.Text;
+        SearchBox.Text = "";
+        await Task.Delay(500);
+        sb.Append($"search: {before} → {during} (\"{title}\") → {_clips.Count}; ");
+        if (_clips.Count > 0)
+        {
+            SetSelected(_clips[0], true);
+            UpdateSelectionBar();
+            sb.Append($"selection bar: {SelectionBar.Visibility} \"{SelectionText.Text}\"");
+            ClearSelection();
+        }
+        return "library: " + sb;
+    }
+
+    /// <summary>CI only: runs the mic noise suppression graph on synthetic noise and compares levels.</summary>
+    static async Task<string> SelfTestNoiseAsync()
+    {
+        var dir = NoiseModel.Directory;
+        if (dir == null || Ffmpeg.Path == null) return "noise: model or ffmpeg missing";
+        // 3 stereo pairs: mix (silent), desktop (silent), mic (pure noise) — mic is also a track
+        var graph = CaptureEngine.DenoiseGraph(3, 2, true, "[0:a]") + ";[mt]volumedetect[mo];[r1]anullsink";
+        var psi = Ffmpeg.StartInfo(new[]
+        {
+            "-hide_banner", "-nostdin", "-f", "lavfi", "-i",
+            "anoisesrc=d=3:a=0.2:r=48000,pan=6c|c0=0*c0|c1=0*c0|c2=0*c0|c3=0*c0|c4=c0|c5=c0",
+            "-filter_complex", graph, "-map", "[a0]", "-map", "[mo]", "-f", "null", "-"
+        });
+        psi.WorkingDirectory = dir;
+        using var p = Process.Start(psi)!;
+        var err = await p.StandardError.ReadToEndAsync();
+        await p.WaitForExitAsync();
+        var mean = System.Text.RegularExpressions.Regex.Match(err, @"mean_volume: (-?[\d.]+) dB");
+        return $"noise: exit={p.ExitCode}, cleaned mic mean {(mean.Success ? mean.Groups[1].Value : "?")} dB (raw noise ≈ -19 dB)" +
+               (p.ExitCode != 0 ? " | " + err.Trim().Split('\n')[^1] : "");
     }
 
     /// <summary>CI only: opens every dropdown in the editor to catch rendering errors.</summary>
@@ -1441,6 +1815,12 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"game menu: popup open={popup}, items=[{headers}]\n");
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "game menu: FAILED " + ex.Message + "\n"); }
+
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestLibraryAsync() + "\n"); }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "library: FAILED " + ex + "\n"); }
+
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestNoiseAsync() + "\n"); }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "noise: FAILED " + ex.Message + "\n"); }
 
         // category rename UI: right-click → Rename swaps the chip for a text box
         try
@@ -1766,6 +2146,7 @@ public partial class MainWindow : Window
 
             DesktopAudioToggle.IsChecked = _settings.DesktopAudio;
             SeparateTracksToggle.IsChecked = _settings.SeparateAudioTracks;
+            NoiseToggle.IsChecked = _settings.MicNoiseSuppression;
             RefreshAppTracksList();
             DesktopVolumeSlider.Value = _settings.DesktopVolume * 100;
             DesktopVolumeValue.Text = $"{_settings.DesktopVolume * 100:0}%";
@@ -1901,6 +2282,7 @@ public partial class MainWindow : Window
         _settings.CaptureCursor = CursorToggle.IsChecked == true;
         _settings.DesktopAudio = DesktopAudioToggle.IsChecked == true;
         _settings.SeparateAudioTracks = SeparateTracksToggle.IsChecked == true;
+        _settings.MicNoiseSuppression = NoiseToggle.IsChecked == true;
         RefreshAppTracksList();
         var mic = SelectedTag<string>(MicCombo);
         _settings.MicDeviceId = string.IsNullOrEmpty(mic) ? null : mic;
@@ -2177,6 +2559,17 @@ public partial class MainWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape && WhatsNewPanel.Visibility == Visibility.Visible) { CloseWhatsNew(); e.Handled = true; return; }
+        if (CapturesPage.Visibility == Visibility.Visible && e.OriginalSource is not TextBox)
+        {
+            if (e.Key == Key.Escape && _selected.Count > 0) { ClearSelection(); e.Handled = true; return; }
+            if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                foreach (var c in _clips) SetSelected(c, true);
+                UpdateSelectionBar();
+                e.Handled = true;
+                return;
+            }
+        }
         base.OnPreviewKeyDown(e);
     }
 

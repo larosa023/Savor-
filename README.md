@@ -25,6 +25,9 @@ Like OBS, minus the streaming, scenes and clutter.</p>
 - Quiet notifications that never steal focus from your game, plus an optional save chime.
 - MP4 or MKV output, launch-at-startup, monitor picker, 30–240 fps, and an output resolution option (record a 1440p screen at 1080p or 720p).
 - **Copy diagnostics** in Settings → About, for quick troubleshooting.
+- **Library tools** — search, multi-select (Ctrl/Shift + click) with bulk game changes, join, copy and delete, drag captures straight into Discord or a folder, and hover previews.
+- **Editor extras** — export as GIF, change speed (0.25×–2×).
+- **Mic noise suppression** — RNNoise removes keyboard clicks, fans and hum from your mic (model from GregorR/rnnoise-models).
 
 ## Download
 

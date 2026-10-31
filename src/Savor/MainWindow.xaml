@@ -90,7 +90,8 @@
         <DataTemplate x:Key="ClipTemplate">
             <Border x:Name="Card" Width="232" Margin="0,0,14,14" CornerRadius="12" Background="{StaticResource SurfaceBrush}"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="1" Cursor="Hand"
-                    Tag="{Binding}" MouseLeftButtonUp="ClipCard_Click" ToolTip="{Binding FilePath}">
+                    Tag="{Binding}" PreviewMouseLeftButtonDown="Card_MouseDown" MouseMove="Card_MouseMove"
+                    MouseLeftButtonUp="ClipCard_Click" MouseEnter="Card_MouseEnter" MouseLeave="Card_MouseLeave">
                 <Border.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="View &amp; edit" Click="ClipOpen_Click"/>
@@ -113,6 +114,17 @@
                             <Border.Background>
                                 <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill"/>
                             </Border.Background>
+                        </Border>
+                        <!-- hover preview: a few frames from the clip, cycled while the mouse is over the card -->
+                        <Border CornerRadius="8" IsHitTestVisible="False">
+                            <Border.Background>
+                                <ImageBrush ImageSource="{Binding HoverFrame}" Stretch="UniformToFill"/>
+                            </Border.Background>
+                        </Border>
+                        <!-- selected (Ctrl / Shift + click) -->
+                        <Border x:Name="SelectBadge" Width="22" Height="22" CornerRadius="11" Background="{StaticResource AccentBrush}"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" FontSize="11" Foreground="White" HorizontalAlignment="Center"/>
                         </Border>
                         <Border Style="{StaticResource Chip}" Background="#B3000000" HorizontalAlignment="Left"
                                 VerticalAlignment="Top" Margin="8">
@@ -138,6 +150,10 @@
                 <DataTrigger Binding="{Binding HasDuration}" Value="False">
                     <Setter TargetName="DurationChip" Property="Visibility" Value="Collapsed"/>
                 </DataTrigger>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter TargetName="SelectBadge" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Card" Property="Background" Value="#1FFF7A45"/>
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsRenaming}" Value="True">
                     <Setter TargetName="NameText" Property="Visibility" Value="Hidden"/>
                     <Setter TargetName="NameBox" Property="Visibility" Value="Visible"/>
@@ -148,6 +164,9 @@
                 <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
                     <Setter TargetName="Card" Property="BorderBrush" Value="#55FF7A45"/>
                 </Trigger>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
 
@@ -590,6 +609,14 @@
                             <TextBlock Text="Open folder"/>
                         </StackPanel>
                     </Button>
+                    <!-- search by name or game -->
+                    <Grid DockPanel.Dock="Right" Width="230" Margin="0,0,10,0" VerticalAlignment="Center">
+                        <TextBox x:Name="SearchBox" TextChanged="Search_Changed" PreviewKeyDown="Search_KeyDown" Padding="0"/>
+                        <TextBlock x:Name="SearchHint" Text="Search captures" IsHitTestVisible="False" Margin="12,0,0,0"
+                                   VerticalAlignment="Center" Foreground="{StaticResource FaintBrush}" FontSize="13"/>
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
+                                   HorizontalAlignment="Right" Margin="0,0,11,0" Foreground="{StaticResource FaintBrush}"/>
+                    </Grid>
                     <TextBlock Text="Captures" FontFamily="{StaticResource DisplayFont}" FontSize="20"
                                FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
@@ -606,10 +633,51 @@
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,0,40">
                         <TextBlock Style="{StaticResource Icon}" Text="&#xE8B2;" FontSize="28" HorizontalAlignment="Center"
                                    Foreground="{StaticResource FaintBrush}"/>
-                        <TextBlock Text="Nothing captured yet" HorizontalAlignment="Center" Margin="0,12,0,4" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="EmptyTitle" Text="Nothing captured yet" HorizontalAlignment="Center" Margin="0,12,0,4" FontWeight="SemiBold"/>
                         <TextBlock x:Name="EmptyHint" Text="Turn on the replay buffer, then press Alt + F10 to save a clip."
                                    HorizontalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
                     </StackPanel>
+
+                    <!-- bulk actions for selected captures (Ctrl / Shift + click) -->
+                    <Border x:Name="SelectionBar" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,18"
+                            Padding="8,6" CornerRadius="12" Background="#F21E1F23" BorderBrush="#33353B" BorderThickness="1"
+                            Visibility="Collapsed">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="Black"/>
+                        </Border.Effect>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="SelectionText" VerticalAlignment="Center" Margin="8,0,12,0" FontWeight="SemiBold"/>
+                            <TextBox x:Name="SelGameBox" Style="{StaticResource InlineEdit}" Width="170" Margin="0,0,6,0" Visibility="Collapsed"
+                                     PreviewKeyDown="SelGameBox_KeyDown" LostKeyboardFocus="SelGameBox_LostFocus" ToolTip="Type the game, then press Enter"/>
+                            <Button x:Name="SelGameButton" Style="{StaticResource GhostButton}" Click="SelGame_Click" ToolTip="Move to a game">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE7FC;" FontSize="12" Margin="0,0,7,0"/>
+                                    <TextBlock Text="Game"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="SelJoinButton" Style="{StaticResource GhostButton}" Click="SelJoin_Click" ToolTip="Join into one video, oldest first">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE71B;" FontSize="12" Margin="0,0,7,0"/>
+                                    <TextBlock Text="Join"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource GhostButton}" Click="SelCopy_Click" ToolTip="Copy the files (paste into Discord or a folder)">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8C8;" FontSize="12" Margin="0,0,7,0"/>
+                                    <TextBlock Text="Copy"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource GhostButton}" Click="SelDelete_Click" ToolTip="Move to the Recycle Bin">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE74D;" FontSize="12" Margin="0,0,7,0"/>
+                                    <TextBlock Text="Delete"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource GhostButton}" Click="SelClear_Click" ToolTip="Clear selection (Esc)" Padding="9,7">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="12"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Grid>
 
@@ -754,6 +822,15 @@
                                                    VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <TextBlock Text="Microphone volume" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="NoiseToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="Capture_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Mic noise suppression" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Removes keyboard clicks, fans and background hum from your mic. Uses a little CPU while capturing."
+                                                   Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
                                 <DockPanel>

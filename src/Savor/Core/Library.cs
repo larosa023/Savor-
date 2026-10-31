@@ -29,6 +29,13 @@ public sealed class ClipItem : INotifyPropertyChanged
     /// <summary>The game it was captured in, if Savor knows.</summary>
     public string? Game => Info?.Game;
 
+    bool _selected;
+    public bool IsSelected { get => _selected; set { if (_selected == value) return; _selected = value; OnChanged(); } }
+
+    ImageSource? _hover;
+    /// <summary>Frame shown while the mouse is over the card (null = the thumbnail).</summary>
+    public ImageSource? HoverFrame { get => _hover; set { _hover = value; OnChanged(); } }
+
     // inline rename on the library card
     bool _renaming;
     /// <summary>The inline box edits the game instead of the file name.</summary>
@@ -247,6 +254,78 @@ public static class Library
             }
         }
         catch { }
+    }
+
+    const int PreviewFrames = 8;
+
+    /// <summary>
+    /// A few small frames spread across the clip, for the hover preview. Made once with ffmpeg (keyframes only for
+    /// longer clips, so it's quick) and cached as one strip image; only kept in memory while hovered.
+    /// </summary>
+    public static async Task<BitmapSource[]?> LoadPreviewFramesAsync(ClipItem item, CancellationToken ct)
+    {
+        string key;
+        try { key = ThumbKey(new FileInfo(item.FilePath)); } catch { return null; }
+        var sprite = Path.Combine(ThumbDir, key + "_p.jpg");
+        if (!File.Exists(sprite))
+        {
+            if (Ffmpeg.Path == null) return null;
+            double dur = ParseDuration(item.Duration) ?? 30;
+            await Gate.WaitAsync(ct);
+            try
+            {
+                if (!File.Exists(sprite))
+                {
+                    Directory.CreateDirectory(ThumbDir);
+                    // a little over N frames per clip so the strip always fills up
+                    var rate = ((PreviewFrames + 1) / Math.Max(1, dur)).ToString("0.#####", CultureInfo.InvariantCulture);
+                    var args = new List<string> { "-hide_banner", "-nostdin", "-y" };
+                    if (dur > 20) args.AddRange(new[] { "-skip_frame", "nokey" });
+                    args.AddRange(new[]
+                    {
+                        "-i", item.FilePath, "-an",
+                        "-vf", $"fps={rate},scale=320:-2:flags=bilinear,tile={PreviewFrames}x1",
+                        "-frames:v", "1", "-q:v", "5", sprite
+                    });
+                    await Ffmpeg.RunAsync(args, TimeSpan.FromSeconds(30), ct);
+                }
+            }
+            finally { Gate.Release(); }
+        }
+        if (!File.Exists(sprite) || ct.IsCancellationRequested) return null;
+
+        var bytes = await File.ReadAllBytesAsync(sprite, ct);
+        return await Task.Run(() =>
+        {
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.StreamSource = new MemoryStream(bytes);
+            bmp.EndInit();
+            bmp.Freeze();
+            int w = bmp.PixelWidth / PreviewFrames, h = bmp.PixelHeight;
+            if (w <= 0 || h <= 0) return null;
+            var frames = new List<BitmapSource>();
+            for (int i = 0; i < PreviewFrames; i++)
+            {
+                var f = new CroppedBitmap(bmp, new System.Windows.Int32Rect(i * w, 0, w, h));
+                f.Freeze();
+                frames.Add(f);
+            }
+            return frames.ToArray();
+        }, ct);
+    }
+
+    static double? ParseDuration(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        double total = 0;
+        foreach (var part in s.Split(':'))
+        {
+            if (!double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return null;
+            total = total * 60 + v;
+        }
+        return total;
     }
 
     static string FormatDuration(TimeSpan t) =>

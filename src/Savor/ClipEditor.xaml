@@ -303,7 +303,21 @@
                 <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
                     <StackPanel>
                         <TextBlock Text="Export" Style="{StaticResource Eyebrow}" Margin="0,0,0,10"/>
-                        <ComboBox x:Name="SaveModeCombo" MinWidth="0">
+                        <ComboBox x:Name="FormatCombo" MinWidth="0" Margin="0,0,0,8" SelectionChanged="ExportOptions_Changed">
+                            <ComboBoxItem Content="Video (MP4)" Tag="video" IsSelected="True"/>
+                            <ComboBoxItem Content="GIF (no sound)" Tag="gif"/>
+                        </ComboBox>
+                        <TextBlock Text="Speed" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,2,0,6"/>
+                        <WrapPanel x:Name="SpeedPanel">
+                            <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="0.25×" Tag="0.25" Checked="ExportOptions_Changed"/>
+                            <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="0.5×" Tag="0.5" Checked="ExportOptions_Changed"/>
+                            <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="1×" Tag="1" IsChecked="True" Checked="ExportOptions_Changed"/>
+                            <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="1.5×" Tag="1.5" Checked="ExportOptions_Changed"/>
+                            <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="2×" Tag="2" Checked="ExportOptions_Changed"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="SpeedNote" Text="Speed is applied to the exported file (the preview plays at normal speed)."
+                                   Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
+                        <ComboBox x:Name="SaveModeCombo" MinWidth="0" Margin="0,4,0,0">
                             <ComboBoxItem Content="Save as a new file" Tag="new" IsSelected="True"/>
                             <ComboBoxItem Content="Replace the original" Tag="replace"/>
                         </ComboBox>

@@ -12,7 +12,7 @@
     <RootNamespace>Savor</RootNamespace>
     <ApplicationIcon>Assets\savor.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.7.4</Version>
+    <Version>0.8.0</Version>
     <Product>Savor</Product>
     <Description>Lightweight screen recorder with a replay buffer</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -34,6 +34,7 @@
   <ItemGroup>
     <Resource Include="Assets\savor.ico" />
     <Resource Include="..\..\CHANGELOG.md" Link="CHANGELOG.md" />
+    <EmbeddedResource Include="Assets\noise.rnnn" LogicalName="noise.rnnn" />
   </ItemGroup>
 
   <!-- compiled by CI with fxc (ps_2_0) from Shaders/ExpandRange.hlsl -->

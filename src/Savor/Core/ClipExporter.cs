@@ -25,6 +25,10 @@ public sealed class ExportRequest
     public int[] Tracks { get; init; } = Array.Empty<int>();
     /// <summary>Stream copy: instant and lossless, but cuts land on the nearest keyframe (≤2 s).</summary>
     public bool Fast { get; init; }
+    /// <summary>Playback speed of the result (0.25–2). Needs re-encoding when not 1.</summary>
+    public double Speed { get; init; } = 1;
+    /// <summary>Make an animated GIF (no audio) instead of a video.</summary>
+    public bool Gif { get; init; }
 }
 
 /// <summary>Trims / crops a clip with the bundled ffmpeg, using the GPU encoder when available.</summary>
@@ -34,13 +38,17 @@ public static class ClipExporter
                                          IProgress<double>? progress, CancellationToken ct)
     {
         if (Ffmpeg.Path == null) throw new InvalidOperationException("FFmpeg isn't available.");
-        var duration = r.End - r.Start;
-        if (duration <= TimeSpan.Zero) throw new InvalidOperationException("The selection is empty.");
+        if (r.End - r.Start <= TimeSpan.Zero) throw new InvalidOperationException("The selection is empty.");
+        var duration = TimeSpan.FromTicks((long)((r.End - r.Start).Ticks / Math.Clamp(r.Speed, 0.1, 10))); // length of the result
 
         var tmp = Path.Combine(Path.GetDirectoryName(r.Output)!, $".savor-export-{Guid.NewGuid():N}{Path.GetExtension(r.Output)}");
         try
         {
-            if (r.Fast)
+            if (r.Gif)
+            {
+                await RunAsync(BuildGifArgs(r, tmp), duration, progress, ct);
+            }
+            else if (r.Fast && Math.Abs(r.Speed - 1) < 0.001)
             {
                 await RunAsync(BuildArgs(r, null, quality, tmp), duration, progress, ct);
             }
@@ -68,10 +76,40 @@ public static class ClipExporter
 
     static string Sec(TimeSpan t) => t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
 
-    static List<string> BuildArgs(ExportRequest r, EncoderDef? enc, QualityPreset quality, string output)
+    /// <summary>atempo only goes from 0.5× to 2×, so slower speeds chain it.</summary>
+    static string Tempo(double speed)
+    {
+        var parts = new List<string>();
+        while (speed < 0.5) { parts.Add("atempo=0.5"); speed /= 0.5; }
+        while (speed > 2) { parts.Add("atempo=2"); speed /= 2; }
+        parts.Add("atempo=" + speed.ToString("0.###", CultureInfo.InvariantCulture));
+        return string.Join(",", parts);
+    }
+
+    static string SpeedFilter(double speed) =>
+        $"setpts=PTS/{speed.ToString("0.###", CultureInfo.InvariantCulture)}";
+
+    /// <summary>Animated GIF: 15 fps, up to 640 px wide, with its own colour palette for a clean look.</summary>
+    static List<string> BuildGifArgs(ExportRequest r, string output)
     {
         var a = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats" };
-        a.AddRange(new[] { "-ss", Sec(r.Start), "-i", r.Input, "-t", Sec(r.End - r.Start) });
+        a.AddRange(new[] { "-ss", Sec(r.Start), "-t", Sec(r.End - r.Start), "-i", r.Input, "-map", "0:v:0", "-an" });
+        var f = new List<string>();
+        if (r.Crop is { } c) f.Add($"crop={c.Width}:{c.Height}:{c.X}:{c.Y}");
+        if (Math.Abs(r.Speed - 1) > 0.001) f.Add(SpeedFilter(r.Speed));
+        f.Add("fps=15");
+        f.Add("scale='min(640,iw)':-2:flags=lanczos");
+        a.AddRange(new[] { "-vf", string.Join(",", f) + ",split[g0][g1];[g0]palettegen=stats_mode=diff[gp];[g1][gp]paletteuse=dither=bayer:bayer_scale=4",
+                           "-loop", "0", "-f", "gif", output });
+        return a;
+    }
+
+    static List<string> BuildArgs(ExportRequest r, EncoderDef? enc, QualityPreset quality, string output)
+    {
+        bool speed = Math.Abs(r.Speed - 1) > 0.001 && enc != null;
+        var a = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats" };
+        // -t as an input option limits what is read, so a slowed-down result isn't cut short
+        a.AddRange(new[] { "-ss", Sec(r.Start), "-t", Sec(r.End - r.Start), "-i", r.Input });
         a.AddRange(new[] { "-map", "0:v:0" });
         switch (r.Audio)
         {
@@ -82,7 +120,7 @@ public static class ClipExporter
                 break;
             case AudioExport.Selected:
                 var inputs = string.Concat(r.Tracks.Select(t => $"[0:a:{t}]"));
-                a.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={r.Tracks.Length}:normalize=0[am]", "-map", "[am]" });
+                a.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={r.Tracks.Length}:normalize=0{(speed ? "," + Tempo(r.Speed) : "")}[am]", "-map", "[am]" });
                 break;
         }
 
@@ -94,11 +132,15 @@ public static class ClipExporter
         {
             var filters = new List<string>();
             if (r.Crop is { } c) filters.Add($"crop={c.Width}:{c.Height}:{c.X}:{c.Y}");
+            if (speed) filters.Add(SpeedFilter(r.Speed));
             filters.Add(enc.Vendor == "cpu" ? "format=yuv420p" : "format=nv12");
             a.AddRange(new[] { "-vf", string.Join(",", filters) });
             var q = quality < QualityPreset.High ? QualityPreset.High : quality;
             a.AddRange(Ffmpeg.EncoderArgs(enc, q, 60, live: false));
             if (r.Audio != AudioExport.None) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k" });
+            // each kept track gets the same tempo change (the mixed "selected" track already has it)
+            if (speed && r.Audio != AudioExport.None && !(r.Audio == AudioExport.Selected && r.Tracks.Length > 1))
+                a.AddRange(new[] { "-af", Tempo(r.Speed) });
         }
         if (r.Audio == AudioExport.None) a.Add("-an");
         if (output.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
@@ -110,7 +152,7 @@ public static class ClipExporter
         return a;
     }
 
-    static async Task RunAsync(List<string> args, TimeSpan duration, IProgress<double>? progress, CancellationToken ct)
+    internal static async Task RunAsync(List<string> args, TimeSpan duration, IProgress<double>? progress, CancellationToken ct)
     {
         using var p = new Process { StartInfo = Ffmpeg.StartInfo(args, redirectInput: true) };
         var err = new StringBuilder();
@@ -140,11 +182,11 @@ public static class ClipExporter
         progress?.Report(1);
     }
 
-    public static string NextOutputPath(string input)
+    public static string NextOutputPath(string input, string? extension = null)
     {
         var dir = Path.GetDirectoryName(input)!;
         var name = Path.GetFileNameWithoutExtension(input);
-        var ext = Path.GetExtension(input);
+        var ext = extension ?? Path.GetExtension(input);
         var path = Path.Combine(dir, $"{name} (edit){ext}");
         for (int n = 2; File.Exists(path); n++) path = Path.Combine(dir, $"{name} (edit {n}){ext}");
         return path;

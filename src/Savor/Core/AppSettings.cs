@@ -113,6 +113,8 @@ public sealed class AppSettings
     public int Fps { get; set; } = 60;
     /// <summary>Record at this height (e.g. 1080), keeping the display's shape. 0 = the display's own size.</summary>
     public int OutputHeight { get; set; } = 0;
+    /// <summary>Remove background noise (keyboard, fans, hum) from the mic with RNNoise.</summary>
+    public bool MicNoiseSuppression { get; set; } = false;
     /// <summary>Results of "can the GPU resize for this encoder" checks, by encoder + size + driver.</summary>
     public Dictionary<string, bool> GpuScaleTests { get; set; } = new();
     /// <summary>Game/app categories the user renamed: detected name → their name (used for new captures too).</summary>
