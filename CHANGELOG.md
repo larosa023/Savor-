@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.7.3 · Oct 31, 2026
+- Fixed an error popup when renaming a game category.
+
 ## 0.7.2 · Oct 31, 2026
 - Rename game / app categories: right-click a category at the top of Captures → Rename. Its captures move to the new name, and new captures from that app use it too.
 

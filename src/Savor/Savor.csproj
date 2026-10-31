@@ -12,7 +12,7 @@
     <RootNamespace>Savor</RootNamespace>
     <ApplicationIcon>Assets\savor.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.7.2</Version>
+    <Version>0.7.3</Version>
     <Product>Savor</Product>
     <Description>Lightweight screen recorder with a replay buffer</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

@@ -1149,7 +1149,9 @@ public partial class MainWindow : Window
             Padding = new Thickness(8, 4, 8, 4),
             VerticalAlignment = VerticalAlignment.Top,
         };
-        GameFilters.Children[idx] = box;
+        // (a panel slot can't be overwritten in place: remove the chip, then insert the box)
+        GameFilters.Children.RemoveAt(idx);
+        GameFilters.Children.Insert(idx, box);
         long started = Environment.TickCount64;
         bool done = false;
         void Refocus() => Dispatcher.BeginInvoke(() => { box.Focus(); Keyboard.Focus(box); box.SelectAll(); }, DispatcherPriority.ContextIdle);
@@ -1366,6 +1368,19 @@ public partial class MainWindow : Window
             Directory.Delete(dir, true);
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "meta: FAILED " + ex.Message + "\n"); }
+
+        // category rename UI: right-click → Rename swaps the chip for a text box
+        try
+        {
+            var chip = new RadioButton { Content = "Test" };
+            GameFilters.Children.Add(chip);
+            StartCategoryRename(chip, "Test");
+            bool ok = GameFilters.Children.OfType<TextBox>().Any() && !GameFilters.Children.Contains(chip);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"category rename UI: {(ok ? "OK" : "box missing")}\n");
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "category rename UI: FAILED " + ex.Message + "\n"); }
+        _filterSignature = "";
+        ReloadClips();
 
         try
         {
