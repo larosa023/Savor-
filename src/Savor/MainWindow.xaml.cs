@@ -1902,6 +1902,7 @@ public partial class MainWindow : Window
 
         try
         {
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await _editor.SelfTestEarlyScrubAsync() + "\n");
             var result = await _editor.SelfTestScrubAsync();
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), result + "\n");
         }

@@ -804,6 +804,19 @@ public partial class ClipEditor : UserControl
         $"audio tracks={_tracks.Count} [{string.Join(", ", _tracks.Select(t => t.Name))}], listening={string.Join("+", _listen)}, " +
         $"player ready={_audio?.Ready == true}, status=\"{ListenStatus.Text}\", windows player muted={Player.IsMuted}";
 
+    /// <summary>CI only: right after opening, how soon can the far end of the clip be previewed?</summary>
+    public async Task<string> SelfTestEarlyScrubAsync()
+    {
+        StartFilmstrip(); // as if the clip had just been opened
+        var sw = Stopwatch.StartNew();
+        var far = TimeSpan.FromTicks((long)(_duration.Ticks * 0.9));
+        int id = -1;
+        while (sw.ElapsedMilliseconds < 15000 && (id = _strip?.IndexAt(far) ?? -1) < 0) await Task.Delay(20);
+        long ready = sw.ElapsedMilliseconds;
+        return $"early scrub: frame for 90% point after {ready} ms ({(id >= 1_000_000 ? "keyframe" : id >= 0 ? "dense" : "none")}), " +
+               $"keyframes={_strip?.KeyCount}, dense so far={_strip?.Count}";
+    }
+
     /// <summary>CI only: simulates a fast drag of the start handle and reports per-frame cost.</summary>
     public async Task<string> SelfTestScrubAsync()
     {

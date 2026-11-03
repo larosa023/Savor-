@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.8.2 · Nov 3, 2026
+- Smooth trimming right after opening a clip: preview frames for the whole clip are ready almost instantly (detail fills in a few seconds later), so the picture no longer falls behind on long or 1440p clips.
+
 ## 0.8.1 · Nov 3, 2026
 - Opens faster: Savor now ships precompiled, so it starts and responds to its first clicks quicker.
 - Captures stay smooth with big libraries: searching and switching games no longer re-read the folder, the grid only redraws when something changed, and nothing is scanned while Savor is in the tray.
