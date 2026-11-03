@@ -1,6 +1,6 @@
 # What's new in Savor
 
-## 0.8.2 · Nov 3, 2026
+## 0.8.3 · Nov 3, 2026
 - Smooth trimming right after opening a clip: preview frames for the whole clip are ready almost instantly (detail fills in a few seconds later), so the picture no longer falls behind on long or 1440p clips.
 
 ## 0.8.1 · Nov 3, 2026
