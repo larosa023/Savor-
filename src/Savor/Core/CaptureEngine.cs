@@ -123,7 +123,7 @@ public sealed class CaptureEngine : IDisposable
             _holdFrom = pick[0].Index;
             try
             {
-                var game = s.GameName(ForegroundApp.CurrentName());
+                var game = ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game ?? "Clip", s);
                 if (!await ConcatAsync(pick.Select(p => p.Path).ToList(), output, s)) return null;
                 new ClipMeta(ClipMeta.Clip, game).Write(output);
@@ -145,7 +145,7 @@ public sealed class CaptureEngine : IDisposable
             var segs = Segments();
             _recordFrom = fresh || segs.Count == 0 ? 0 : segs[^1].Index;
             RecordingStartedUtc = DateTime.UtcNow;
-            _recordGame = _settings().GameName(ForegroundApp.CurrentName());
+            _recordGame = ClipMeta.CleanGame(_settings().GameName(ForegroundApp.CurrentName()));
             Recording = true;
         }
         finally { _op.Release(); StateChanged?.Invoke(); }
@@ -172,7 +172,7 @@ public sealed class CaptureEngine : IDisposable
             string? result = null;
             if (segs.Count > 0)
             {
-                var game = _recordGame ?? s.GameName(ForegroundApp.CurrentName());
+                var game = _recordGame ?? ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game != null ? game + " Recording" : "Recording", s);
                 if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s))
                 {

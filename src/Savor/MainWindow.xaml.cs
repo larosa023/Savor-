@@ -80,7 +80,11 @@ public partial class MainWindow : Window
         _uiTimer.Tick += (_, _) => Tick();
 
         SourceInitialized += (_, _) => OnSourceInitialized();
-        IsVisibleChanged += (_, _) => { if (!IsVisible) { _editor?.PauseIfPlaying(); ScheduleTrim(); } };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible) { _editor?.PauseIfPlaying(); StopHover(); ScheduleTrim(); }
+            else if (_reloadPending) ReloadClips(); // captures saved while hidden
+        };
         StateChanged += (_, _) =>
         {
             if (WindowState == WindowState.Minimized) ScheduleTrim();
@@ -1000,8 +1004,8 @@ public partial class MainWindow : Window
         _settings.Save();
 
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
-        try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         _captureDirty = true;
+        try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         LoadStudioUi();
         SourceNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
         await ApplyCaptureChangesAsync();
@@ -1023,9 +1027,18 @@ public partial class MainWindow : Window
         if (StudioPage == null || CapturesPage == null) return;
         if (_loadingUi) return;
         var target = ReferenceEquals(sender, CapturesTab) ? CapturesPage : StudioPage;
+        if (EditorPage.Visibility == Visibility.Visible && _editor is { IsBusy: true })
+        {
+            // leaving mid-export would orphan it: stay in the editor
+            _loadingUi = true;
+            CapturesTab.IsChecked = true;
+            _loadingUi = false;
+            Notify("Export in progress", "Wait for it to finish, or press Cancel in the editor.");
+            return;
+        }
         if (EditorPage.Visibility == Visibility.Visible)
         {
-            if (_editor != null) { _editor.Release(); EditorPage.Children.Clear(); _editor = null; }
+            if (_editor != null) { _editor.Close(); EditorPage.Children.Clear(); _editor = null; }
             EditorPage.Visibility = Visibility.Collapsed;
             target.Visibility = Visibility.Collapsed; // let SwitchPage animate it in
         }
@@ -1062,7 +1075,26 @@ public partial class MainWindow : Window
 
     List<ClipItem> _all = new(); // the last folder scan (search and game chips filter this, no disk access)
 
-    void ReloadClips() => RefreshClips(rescan: true);
+    bool _reloadPending;
+    int _scanSeq;
+
+    /// <summary>
+    /// Rescans the captures folder in the background, then updates the grid. While Savor is hidden in the tray
+    /// nothing is scanned (it happens when the window comes back), so saving clips mid-game costs nothing here.
+    /// </summary>
+    async void ReloadClips()
+    {
+        if (!IsVisible) { _reloadPending = true; return; }
+        _reloadPending = false;
+        int seq = ++_scanSeq;
+        var folder = _settings.OutputFolder;
+        List<ClipItem> list;
+        try { list = await Task.Run(() => Library.Scan(folder)); }
+        catch { return; }
+        if (seq != _scanSeq) return; // a newer scan is on its way
+        _all = list;
+        RefreshClips(rescan: false);
+    }
 
     void RefreshClips(bool rescan)
     {
@@ -1079,7 +1111,7 @@ public partial class MainWindow : Window
                        .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                                    (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
                        .Take(MaxCards).ToList();
-        var known = new Dictionary<string, ClipItem>(StringComparer.OrdinalIgnoreCase);
+        var known = new Dictionary<string, ClipItem>(StringComparer.Ordinal); // a case-only rename must show the new name
         foreach (var c in _clips) known[c.FilePath + "|" + c.Size] = c;
         var next = new List<ClipItem>(items.Count);
         foreach (var it in items)
@@ -1171,21 +1203,26 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    void SelDelete_Click(object sender, RoutedEventArgs e)
+    async void SelDelete_Click(object sender, RoutedEventArgs e)
     {
-        var sel = SelectedClips();
-        int done = 0;
-        foreach (var c in sel)
+        StopHover();
+        var files = SelectedClips().Select(c => c.FilePath).ToList();
+        int done = await Task.Run(() =>
         {
-            try
+            int n = 0;
+            foreach (var f in files)
             {
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(c.FilePath,
-                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                done++;
+                try
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(f,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    n++;
+                }
+                catch { }
             }
-            catch { }
-        }
+            return n;
+        });
         ClearSelection();
         ReloadClips();
         if (done > 0) Notify("Deleted", $"{done} capture{(done == 1 ? "" : "s")} moved to the Recycle Bin.");
@@ -1246,12 +1283,14 @@ public partial class MainWindow : Window
     async Task SetGameForSelectionAsync(string? game)
     {
         var sel = SelectedClips();
+        StopHover();
+        bool ok = true;
         try { await Task.Run(() => { foreach (var c in sel) Library.SetGame(c, game); }); }
-        catch (Exception ex) { Notify("Couldn't change the game", ex.Message, error: true); }
+        catch (Exception ex) { ok = false; Notify("Couldn't change the game", ex.Message, error: true); }
         ClearSelection();
         _filterSignature = "";
         ReloadClips();
-        Notify("Moved", $"{sel.Count} capture{(sel.Count == 1 ? "" : "s")} → {game ?? "no game"}");
+        if (ok) Notify("Moved", $"{sel.Count} capture{(sel.Count == 1 ? "" : "s")} → {game ?? "no game"}");
     }
 
     bool _joining;
@@ -1426,6 +1465,7 @@ public partial class MainWindow : Window
     async Task SetClipGameAsync(ClipItem c, string? game)
     {
         if (string.Equals(c.Game, game, StringComparison.OrdinalIgnoreCase) && c.Game == game) return;
+        StopHover();
         try { await Task.Run(() => Library.SetGame(c, game)); }
         catch (Exception ex) { Notify("Couldn't change the game", ex.Message, error: true); }
         ReloadClips();
@@ -1482,12 +1522,15 @@ public partial class MainWindow : Window
             return;
         }
         if (name.Trim() == c.Name) return;
-        try
-        {
-            Library.Rename(c.FilePath, name);
-            ReloadClips();
-        }
+        _ = RenameClipAsync(c.FilePath, name);
+    }
+
+    async Task RenameClipAsync(string path, string name)
+    {
+        StopHover(); // a hover preview reading the file would block the rename
+        try { await Task.Run(() => Library.Rename(path, name)); }
         catch (Exception ex) { Notify("Couldn't rename", ex.Message, error: true); }
+        ReloadClips();
     }
 
     static ClipItem? ClipFrom(object sender) => (sender as FrameworkElement)?.DataContext as ClipItem;
@@ -1508,6 +1551,7 @@ public partial class MainWindow : Window
     void Card_MouseMove(object sender, MouseEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed || _downClip is not { IsRenaming: false } c || _dragged) return;
+        if (!ReferenceEquals(ClipFrom(sender), c)) return; // the press started on another card (or empty space)
         var d = e.GetPosition(this) - _downPoint;
         if (Math.Abs(d.X) < SystemParameters.MinimumHorizontalDragDistance * 2 &&
             Math.Abs(d.Y) < SystemParameters.MinimumVerticalDragDistance * 2) return;
@@ -1529,7 +1573,10 @@ public partial class MainWindow : Window
     void ClipCard_Click(object sender, MouseButtonEventArgs e)
     {
         if (ClipFrom(sender) is not { IsRenaming: false } c) return;
-        if (_dragged) { _dragged = false; return; }
+        bool wasDrag = _dragged;
+        _dragged = false;
+        _downClip = null;
+        if (wasDrag) return;
         var mods = Keyboard.Modifiers;
         if (mods.HasFlag(ModifierKeys.Shift) && _anchor != null && _clips.Contains(_anchor))
         {
@@ -1688,6 +1735,7 @@ public partial class MainWindow : Window
 
         // search + selection on the real Captures list
         ReloadClips();
+        await Task.Delay(800);
         int before = _clips.Count;
         SearchBox.Text = "zzzz-no-match";
         await Task.Delay(500);
@@ -1915,7 +1963,7 @@ public partial class MainWindow : Window
     {
         if (_editor != null)
         {
-            _editor.Release();
+            _editor.Close();
             EditorPage.Children.Clear();   // drop the whole editor so its video memory goes too
             _editor = null;
         }
@@ -1942,6 +1990,7 @@ public partial class MainWindow : Window
     void ClipDelete_Click(object sender, RoutedEventArgs e)
     {
         if (ClipFrom(sender) is not { } c) return;
+        StopHover();
         try
         {
             Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(c.FilePath,
@@ -2269,14 +2318,22 @@ public partial class MainWindow : Window
         var enc = _engine.Encoder;
         if (size is not { } sz || enc == null || enc.Pipeline != CapturePipeline.DdaDirect) { _engine.GpuScale = false; return; }
         var key = $"{enc.Key}|{sz.W}x{sz.H}|{Ffmpeg.Stamp()}|{GpuInfo.Stamp()}";
-        if (!_settings.GpuScaleTests.TryGetValue(key, out var ok))
+        if (_settings.GpuScaleTests.TryGetValue(key, out var ok)) { _engine.GpuScale = ok; return; }
+
+        // not checked yet: resize on the CPU (always works) until the GPU check says otherwise
+        _engine.GpuScale = false;
+        ok = await Task.Run(() => Ffmpeg.TestGpuScaleAsync(enc, sz));
+        if (_settings.GpuScaleTests.Count > 16) _settings.GpuScaleTests.Clear();
+        _settings.GpuScaleTests[key] = ok;
+        _settings.Save();
+        // only apply if the settings are still the ones that were tested
+        if (Ffmpeg.OutputSize(_engine.Display, _settings.OutputHeight) != size || !ReferenceEquals(_engine.Encoder, enc)) return;
+        if (ok && !_engine.GpuScale)
         {
-            ok = await Task.Run(() => Ffmpeg.TestGpuScaleAsync(enc, sz));
-            if (_settings.GpuScaleTests.Count > 16) _settings.GpuScaleTests.Clear();
-            _settings.GpuScaleTests[key] = ok;
-            _settings.Save();
+            _engine.GpuScale = true;
+            _captureDirty = true;
+            if (SettingsPage.Visibility != Visibility.Visible) _ = ApplyCaptureChangesAsync();
         }
-        _engine.GpuScale = ok;
     }
 
     async void Capture_Changed(object sender, RoutedEventArgs e)
@@ -2300,8 +2357,8 @@ public partial class MainWindow : Window
 
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId);
+        _captureDirty = true; // before any await, so leaving Settings right away still applies the change
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
-        _captureDirty = true;
         ApplyNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
         RefreshState();
     }
@@ -2502,11 +2559,16 @@ public partial class MainWindow : Window
     void Settings_Click(object sender, RoutedEventArgs e)
     {
         if (SettingsPage.Visibility == Visibility.Visible) { _ = BackAsync(); return; }
+        if (EditorPage.Visibility == Visibility.Visible && _editor is { IsBusy: true })
+        {
+            Notify("Export in progress", "Wait for it to finish, or press Cancel in the editor.");
+            return;
+        }
         LoadSettingsIntoUi();
         ApplyNote.Visibility = _engine.Recording && _captureDirty ? Visibility.Visible : Visibility.Collapsed;
         if (EditorPage.Visibility == Visibility.Visible)
         {
-            if (_editor != null) { _editor.Release(); EditorPage.Children.Clear(); _editor = null; }
+            if (_editor != null) { _editor.Close(); EditorPage.Children.Clear(); _editor = null; }
             EditorPage.Visibility = Visibility.Collapsed;
             CapturesPage.Visibility = Visibility.Visible;
             _mainPage = CapturesPage;

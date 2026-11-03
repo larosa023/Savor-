@@ -124,8 +124,10 @@ public sealed class AppSettings
     public string? GameName(string? detected)
     {
         if (detected == null) return null;
+        var key = ClipMeta.CleanGame(detected); // categories are named by the file-safe form ("Jedi: Survivor" → "Jedi Survivor")
         foreach (var (from, to) in GameAliases) // case-insensitive (the saved dictionary loads case-sensitive)
-            if (string.Equals(from, detected, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(to)) return to;
+            if ((string.Equals(from, detected, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(ClipMeta.CleanGame(from), key, StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrWhiteSpace(to)) return to;
         return detected;
     }
     public QualityPreset Quality { get; set; } = QualityPreset.High;

@@ -17,7 +17,9 @@ namespace Savor.Core;
 /// </summary>
 public static class ClipJoiner
 {
-    sealed record Info(string Codec, int W, int H, double Fps, int AudioTracks, double Duration);
+    /// <param name="Signature">Codec / profile / pixel format / colour and each audio track's format: lossless joining
+    /// needs these to match exactly, otherwise the second part can play back as garbage.</param>
+    sealed record Info(string Codec, int W, int H, double Fps, int AudioTracks, double Duration, string Signature);
 
     static readonly Regex VideoRx = new(@"Stream #\d+:\d+.*?: Video: (\w+).*?, (\d{2,5})x(\d{2,5})", RegexOptions.Compiled);
     static readonly Regex FpsRx = new(@"([\d.]+) fps", RegexOptions.Compiled);
@@ -35,8 +37,21 @@ public static class ClipJoiner
             ? int.Parse(d.Groups[1].Value) * 3600 + int.Parse(d.Groups[2].Value) * 60 + double.Parse(d.Groups[3].Value, CultureInfo.InvariantCulture)
             : 0;
         int audio = Regex.Matches(err, @"Stream #\d+:\d+.*?: Audio:").Count;
+        var sig = new StringBuilder();
+        foreach (var l in err.Split('\n'))
+        {
+            int vi = l.IndexOf("Video: ", StringComparison.Ordinal), ai = l.IndexOf("Audio: ", StringComparison.Ordinal);
+            if (vi >= 0)
+            {
+                var desc = l[(vi + 7)..];
+                var res = Regex.Match(desc, @"\d{2,5}x\d{2,5}");
+                sig.Append("V:").Append(res.Success ? desc[..res.Index] : desc).Append('|');
+            }
+            else if (ai >= 0)
+                sig.Append("A:").Append(string.Join(",", l[(ai + 7)..].Split(", ").Take(4))).Append('|'); // codec, rate, layout, format
+        }
         return new Info(v.Groups[1].Value, int.Parse(v.Groups[2].Value), int.Parse(v.Groups[3].Value),
-            f.Success ? double.Parse(f.Groups[1].Value, CultureInfo.InvariantCulture) : 60, audio, dur);
+            f.Success ? double.Parse(f.Groups[1].Value, CultureInfo.InvariantCulture) : 60, audio, dur, sig.ToString());
     }
 
     /// <summary>Returns the path of the joined video (next to the first clip).</summary>
@@ -61,7 +76,8 @@ public static class ClipJoiner
 
         var a0 = infos[0];
         bool same = infos.All(i => i.Codec == a0.Codec && i.W == a0.W && i.H == a0.H &&
-                                   Math.Abs(i.Fps - a0.Fps) < 0.5 && i.AudioTracks == a0.AudioTracks);
+                                   Math.Abs(i.Fps - a0.Fps) < 0.5 && i.AudioTracks == a0.AudioTracks &&
+                                   i.Signature == a0.Signature);
         try
         {
             if (same) await CopyJoinAsync(inputs, tmp, ext, total, progress, ct);

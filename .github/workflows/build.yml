@@ -58,16 +58,7 @@ jobs:
         run: >
           dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=false -p:DebugType=none -o publish
-
-      # Same build precompiled (ReadyToRun), only to compare start-up time and memory below.
-      - name: Publish ReadyToRun variant (comparison)
-        if: github.event_name == 'push'
-        continue-on-error: true
-        run: >
-          dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=false -p:DebugType=none -p:PublishReadyToRun=true -o publish-r2r
+          -p:EnableCompressionInSingleFile=false -p:DebugType=none -p:PublishReadyToRun=true -o publish
 
       - name: Start-up timing
         if: github.event_name == 'push'
@@ -75,7 +66,7 @@ jobs:
         shell: pwsh
         run: |
           function Mb($b) { [math]::Round($b / 1MB, 1) }
-          foreach ($variant in @("publish", "publish-r2r")) {
+          foreach ($variant in @("publish")) {
             $exe = "$variant/Savor.exe"
             if (-not (Test-Path $exe)) { continue }
             $times = @(); $mems = @()

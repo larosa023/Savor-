@@ -111,6 +111,16 @@ public partial class ClipEditor : UserControl
         Focus();
     }
 
+    bool _closed; // the editor has been removed from the window: never reopen a file after this
+
+    /// <summary>Final release when the editor is closed (it's discarded afterwards).</summary>
+    public void Close()
+    {
+        _closed = true;
+        _exportCts?.Cancel();
+        Release();
+    }
+
     /// <summary>Stops playback and releases the decoder and the file handle.</summary>
     public void Release()
     {
@@ -164,9 +174,9 @@ public partial class ClipEditor : UserControl
     {
         if (_path == null || _settings == null || _renaming) return;
         var current = Path.GetFileNameWithoutExtension(_path);
-        if (!IsVisible)
+        if (_closed)
         {
-            // leaving the editor while typing: just rename the file, don't reopen it
+            // the editor was closed while typing: just rename the file (it's already released)
             if (name.Trim().Length > 0 && name.Trim() != current)
                 try { var p = _path; var np = await Task.Run(() => Library.Rename(p, name)); Renamed?.Invoke(np); } catch { }
             return;
@@ -186,10 +196,16 @@ public partial class ClipEditor : UserControl
         try
         {
             // the player keeps the file open, so let go of it while it's renamed
+            var trim = (_in, _out);
             Release();
             try { newPath = await Task.Run(() => Library.Rename(oldPath, name)); }
             catch (Exception ex) { error = ex.Message; }
-            var trim = (_in, _out);
+            if (_closed)
+            {
+                // closed while renaming: don't reopen the file in an editor nobody can see
+                if (error == null) Renamed?.Invoke(newPath);
+                return;
+            }
             Open(newPath, _settings, _encoder!);
             _resume = (pos, trim.Item1, trim.Item2);
             if (error != null) ShowStatus(error, error: true);
@@ -1024,8 +1040,8 @@ public partial class ClipEditor : UserControl
         bool reencode = IsGif || Math.Abs(ExportSpeed - 1) > 0.001;
         FastToggle.IsEnabled = !reencode && _cropMode == "none";
         if (reencode) FastToggle.IsChecked = false;
-        SaveModeCombo.IsEnabled = !IsGif;
-        if (IsGif) SaveModeCombo.SelectedIndex = 0;
+        SaveModeCombo.IsEnabled = !reencode;   // GIFs and speed changes always go to a new file
+        if (reencode) SaveModeCombo.SelectedIndex = 0;
         SpeedNote.Visibility = Math.Abs(ExportSpeed - 1) > 0.001 ? Visibility.Visible : Visibility.Collapsed;
         UpdateTrimText();
     }
@@ -1043,7 +1059,8 @@ public partial class ClipEditor : UserControl
 
         bool gif = IsGif;
         double speed = ExportSpeed;
-        bool replace = !gif && SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
+        bool changesTiming = Math.Abs(speed - 1) > 0.001;
+        bool replace = !gif && !changesTiming && SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
         var audioTag = (AudioCombo.SelectedItem as ComboBoxItem)?.Tag as string;
         var audio = audioTag switch
         {
@@ -1117,12 +1134,12 @@ public partial class ClipEditor : UserControl
             ExportProgress.Visibility = Visibility.Collapsed;
             ExportText.Text = IsGif ? "Export GIF" : "Export";
             UpdateTrimText();
-            if (replace && _path != null)
+            if (replace && _path != null && !_closed)
             {
-                // reopen the (new) file
+                // reopen the (new) file, at the same spot when its timing didn't change
                 var path = _path;
                 Open(path, _settings, _encoder!);
-                if (crop == null && req.Start == TimeSpan.Zero) Seek(Clamp(keepPos, TimeSpan.Zero, _out));
+                if (crop == null && req.Start == TimeSpan.Zero) _resume = (keepPos, TimeSpan.Zero, TimeSpan.Zero);
             }
         }
     }

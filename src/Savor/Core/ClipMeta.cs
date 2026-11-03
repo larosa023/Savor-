@@ -78,6 +78,14 @@ public sealed record ClipMeta(string Kind, string? Game)
         return new ClipMeta(Clip, pre);
     }
 
+    /// <summary>A game name as stored and used in file names ("Jedi: Survivor" → "Jedi Survivor"); null if nothing is left.</summary>
+    public static string? CleanGame(string? game)
+    {
+        if (game == null) return null;
+        var g = SafeFileName(game);
+        return g.Length == 0 ? null : g;
+    }
+
     /// <summary>Makes a game name safe to use in a file name.</summary>
     public static string SafeFileName(string s)
     {

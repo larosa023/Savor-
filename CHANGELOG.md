@@ -1,5 +1,14 @@
 # What's new in Savor
 
+## 0.8.1 · Nov 3, 2026
+- Opens faster: Savor now ships precompiled, so it starts and responds to its first clicks quicker.
+- Captures stay smooth with big libraries: searching and switching games no longer re-read the folder, the grid only redraws when something changed, and nothing is scanned while Savor is in the tray.
+- Renaming and deleting no longer freeze the window, even when a file is busy.
+- Fixed: games with characters like “:” in their name now rename their captures properly.
+- Fixed: joining clips made with different encoders could produce a broken video — Savor now checks and re-encodes when needed.
+- Fixed: a speed-changed export could replace the original file; it now always saves a new file.
+- Fixed: leaving the editor during an export, changing resolution and leaving Settings right away, and a few other rare edge cases.
+
 ## 0.8.0 · Oct 31, 2026
 - Drag captures straight out of Savor into Discord, a browser or a folder.
 - Search captures by name or game (top of Captures).

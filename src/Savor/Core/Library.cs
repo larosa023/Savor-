@@ -77,8 +77,9 @@ public static class Library
             if (!Directory.Exists(folder)) return new();
             var files = new DirectoryInfo(folder)
                 .EnumerateFiles()
-                .Where(f => f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
-                            f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase))
+                .Where(f => (f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
+                             f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase)) &&
+                            !f.Name.StartsWith(".savor-", StringComparison.Ordinal)) // exports / joins still being written
                 .OrderByDescending(f => f.LastWriteTime)
                 .Take(max)
                 .ToList();
@@ -129,7 +130,7 @@ public static class Library
             if (oldKey != null)
             {
                 var newKey = ThumbKey(new FileInfo(target));
-                foreach (var ext in new[] { ".jpg", ".txt" })
+                foreach (var ext in new[] { ".jpg", ".txt", "_p.jpg" })
                 {
                     var from = Path.Combine(ThumbDir, oldKey + ext);
                     if (File.Exists(from)) File.Move(from, Path.Combine(ThumbDir, newKey + ext), true);
@@ -184,6 +185,7 @@ public static class Library
         var name = Path.GetFileNameWithoutExtension(path);
         var pre = ClipMeta.StampedPrefix(name);
         if (pre == null) return path; // the user's own name: leave it
+        oldGame = ClipMeta.CleanGame(oldGame); // the name only ever holds the file-safe form
         string oldPrefix = recording
             ? (oldGame != null ? oldGame + " Recording" : "Recording")
             : (oldGame ?? "Clip");
