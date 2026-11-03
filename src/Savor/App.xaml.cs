@@ -54,6 +54,19 @@ public partial class App : Application
         }
         var window = new MainWindow(minimized, updated, edit);
         MainWindow = window;
+        if (Environment.GetEnvironmentVariable("SAVOR_TIMING") is { Length: > 0 } timingFile)
+        {
+            // CI: how long from launch until the window has drawn its first frame
+            window.ContentRendered += (_, _) =>
+            {
+                try
+                {
+                    var ms = (DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds;
+                    System.IO.File.AppendAllText(timingFile, $"{ms:0}\n");
+                }
+                catch { }
+            };
+        }
         if (!minimized) window.Show();
     }
 

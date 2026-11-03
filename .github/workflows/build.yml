@@ -60,6 +60,44 @@ jobs:
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=false -p:DebugType=none -o publish
 
+      # Same build precompiled (ReadyToRun), only to compare start-up time and memory below.
+      - name: Publish ReadyToRun variant (comparison)
+        if: github.event_name == 'push'
+        continue-on-error: true
+        run: >
+          dotnet publish src/Savor/Savor.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=false -p:DebugType=none -p:PublishReadyToRun=true -o publish-r2r
+
+      - name: Start-up timing
+        if: github.event_name == 'push'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          function Mb($b) { [math]::Round($b / 1MB, 1) }
+          foreach ($variant in @("publish", "publish-r2r")) {
+            $exe = "$variant/Savor.exe"
+            if (-not (Test-Path $exe)) { continue }
+            $times = @(); $mems = @()
+            for ($i = 0; $i -lt 5; $i++) {
+              $tf = Join-Path $env:RUNNER_TEMP "timing-$variant-$i.txt"
+              $env:SAVOR_TIMING = $tf
+              $p = Start-Process $exe -PassThru
+              Start-Sleep 12
+              $p.Refresh()
+              $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
+              Stop-Process -Id $p.Id -Force
+              Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+              Start-Sleep 3
+              if ($i -eq 0) { continue } # first launch unpacks FFmpeg: not a normal start
+              if (Test-Path $tf) { $times += [int](Get-Content $tf | Select-Object -First 1) }
+              $mems += (Mb $pws)
+            }
+            $env:SAVOR_TIMING = $null
+            $size = Mb (Get-Item $exe).Length
+            Write-Host "::notice::START-UP $variant ($size MB exe): first frame ms [$($times -join ', ')], private working set MB [$($mems -join ', ')]"
+          }
+
       - name: Read version
         shell: pwsh
         run: |

@@ -1060,27 +1060,39 @@ public partial class MainWindow : Window
     string _filterSignature = "";
     const int MaxCards = 60;  // newest N cards (thumbnails cost memory)
 
-    void ReloadClips()
+    List<ClipItem> _all = new(); // the last folder scan (search and game chips filter this, no disk access)
+
+    void ReloadClips() => RefreshClips(rescan: true);
+
+    void RefreshClips(bool rescan)
     {
         if (_clipsNeedThumbs)
         {
             _clipsNeedThumbs = false;
             _clips.Clear(); // forces fresh items whose thumbnails load from the disk cache
         }
-        var all = Library.Scan(_settings.OutputFolder);
+        if (rescan) _all = Library.Scan(_settings.OutputFolder);
+        var all = _all;
         BuildGameFilters(all);
         var q = SearchBox?.Text.Trim() ?? "";
         var items = all.Where(c => _gameFilter == null || string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase))
                        .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                                    (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
                        .Take(MaxCards).ToList();
-        var known = _clips.ToDictionary(c => c.FilePath + c.Size, c => c);
-        _clips.Clear();
+        var known = new Dictionary<string, ClipItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in _clips) known[c.FilePath + "|" + c.Size] = c;
+        var next = new List<ClipItem>(items.Count);
         foreach (var it in items)
         {
-            if (known.TryGetValue(it.FilePath + it.Size, out var existing) && existing.Game == it.Game) { _clips.Add(existing); continue; }
-            _clips.Add(it);
+            if (known.TryGetValue(it.FilePath + "|" + it.Size, out var existing) && existing.Game == it.Game) { next.Add(existing); continue; }
+            next.Add(it);
             _ = Library.LoadThumbnailAsync(it);
+        }
+        // only touch the grid when something actually changed (rebuilding every card is what makes lists flicker)
+        if (!next.SequenceEqual(_clips))
+        {
+            _clips.Clear();
+            foreach (var c in next) _clips.Add(c);
         }
         // keep the selection for captures still shown
         _selected.IntersectWith(_clips.Select(c => c.FilePath));
@@ -1102,7 +1114,7 @@ public partial class MainWindow : Window
     {
         SearchHint.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         _searchTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(160), DispatcherPriority.Background,
-            (_, _) => { _searchTimer!.Stop(); ReloadClips(); }, Dispatcher);
+            (_, _) => { _searchTimer!.Stop(); RefreshClips(rescan: false); }, Dispatcher);
         _searchTimer.Stop();
         _searchTimer.Start();
     }
@@ -1227,7 +1239,7 @@ public partial class MainWindow : Window
         SelGameBox.Visibility = Visibility.Collapsed;
     }
 
-    List<string> KnownGames() => Library.Scan(_settings.OutputFolder).Where(x => x.Game != null)
+    List<string> KnownGames() => _all.Where(x => x.Game != null)
         .GroupBy(x => x.Game!, StringComparer.OrdinalIgnoreCase)
         .OrderByDescending(g => g.Max(x => x.Created)).Select(g => g.First().Game!).ToList();
 
@@ -1303,7 +1315,7 @@ public partial class MainWindow : Window
         {
             if (string.Equals(_gameFilter, game, StringComparison.OrdinalIgnoreCase)) return;
             _gameFilter = game;
-            ReloadClips();
+            RefreshClips(rescan: false);
         };
         if (game != null)
         {
@@ -1392,9 +1404,7 @@ public partial class MainWindow : Window
     {
         if (sender is not MenuItem menu || !ReferenceEquals(e.OriginalSource, menu) || ClipFrom(menu) is not { } c) return;
         menu.Items.Clear();
-        var games = Library.Scan(_settings.OutputFolder).Where(x => x.Game != null)
-            .GroupBy(x => x.Game!, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(g => g.Max(x => x.Created)).Select(g => g.First().Game!).ToList();
+        var games = KnownGames();
         foreach (var g in games)
         {
             var item = new MenuItem { Header = g, IsCheckable = false, IsChecked = string.Equals(g, c.Game, StringComparison.OrdinalIgnoreCase) };
