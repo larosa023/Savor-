@@ -811,9 +811,15 @@ public partial class ClipEditor : UserControl
         var sw = Stopwatch.StartNew();
         var far = TimeSpan.FromTicks((long)(_duration.Ticks * 0.9));
         int id = -1;
-        while (sw.ElapsedMilliseconds < 15000 && (id = _strip?.IndexAt(far) ?? -1) < 0) await Task.Delay(20);
+        long first = -1;
+        while (sw.ElapsedMilliseconds < 15000 && (id = _strip?.IndexAt(far) ?? -1) < 0)
+        {
+            if (first < 0 && (_strip?.KeyCount ?? 0) > 0) first = sw.ElapsedMilliseconds;
+            await Task.Delay(20);
+        }
         long ready = sw.ElapsedMilliseconds;
-        return $"early scrub: frame for 90% point after {ready} ms ({(id >= 1_000_000 ? "keyframe" : id >= 0 ? "dense" : "none")}), " +
+        if (first < 0) first = ready;
+        return $"early scrub: first keyframe after {first} ms, frame for 90% point after {ready} ms ({(id >= 1_000_000 ? "keyframe" : id >= 0 ? "dense" : "none")}), " +
                $"keyframes={_strip?.KeyCount}, dense so far={_strip?.Count}";
     }
 

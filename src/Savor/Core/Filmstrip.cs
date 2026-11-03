@@ -57,7 +57,8 @@ public sealed class Filmstrip : IDisposable
     {
         var args = new List<string>
         {
-            "-hide_banner", "-loglevel", "info", "-nostdin", "-hwaccel", "auto", "-skip_frame", "nokey",
+            // CPU decoding on purpose: only keyframes are decoded, which is cheap, and GPU decoders may decode every frame
+            "-hide_banner", "-loglevel", "info", "-nostdin", "-threads", "2", "-skip_frame", "nokey",
             "-i", path, "-an", "-sn", "-fps_mode", "passthrough",
             "-vf", "showinfo,scale='min(960,iw)':-2:flags=area",
             "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "pipe:1"
