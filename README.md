@@ -43,6 +43,7 @@ Captures go to `Videos\Savor` by default (change it in Settings).
 | Save clip (last N seconds) | Alt + F10 |
 | Start / stop recording | Alt + F9 |
 | Replay buffer on / off | Alt + F8 |
+| Add a marker | Alt + F7 |
 
 All of them can be changed in Settings → Hotkeys — any key works (Delete, Insert, a lone Ctrl, F-keys, numpad), with or without modifiers, plus mouse side buttons and middle click. Hotkeys never block the key in other apps.
 

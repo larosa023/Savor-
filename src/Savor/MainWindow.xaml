@@ -929,6 +929,21 @@
                                     </StackPanel>
                                     <TextBlock Text="Turn replay buffer on / off" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
                                 </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Padding="9,6" Margin="0,0,6,0" Tag="marker"
+                                                Click="HotkeyClear_Click" ToolTip="Remove this shortcut">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                                        </Button>
+                                        <Button x:Name="MarkerHotkeyButton" Style="{StaticResource HotkeyButton}"
+                                            Tag="marker" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" PreviewKeyUp="Hotkey_KeyUp" PreviewMouseDown="Hotkey_MouseDown" LostFocus="Hotkey_LostFocus"/>
+                                    </StackPanel>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Add a marker" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Marks the moment in your recording or replay buffer; markers show on the editor's timeline." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
                                 <TextBlock x:Name="HotkeyNote" Style="{StaticResource RowDesc}" Margin="0,14,0,0"
                                            Text="Click a shortcut, then press any key or combo — even Delete, a lone Ctrl, or mouse 4/5. Esc cancels, × removes it."/>
                             </StackPanel>

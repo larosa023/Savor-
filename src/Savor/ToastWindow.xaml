@@ -6,7 +6,7 @@
         SizeToContent="WidthAndHeight" FontFamily="{StaticResource UiFont}"
         Opacity="0">
     <Border Margin="16" CornerRadius="12" Background="#F21E1F23" BorderBrush="#33353B" BorderThickness="1"
-            Padding="14,12" Cursor="Hand" MouseLeftButtonUp="OnClick" MinWidth="280" MaxWidth="380">
+            Padding="14,12" Cursor="Hand" MouseLeftButtonUp="OnClick" MinWidth="280" MaxWidth="440">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="Black"/>
         </Border.Effect>
@@ -14,6 +14,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Border x:Name="Badge" Width="34" Height="34" CornerRadius="9" Background="{StaticResource AccentSoftBrush}"
                     VerticalAlignment="Center" Margin="0,0,12,0">
@@ -25,6 +26,14 @@
                 <TextBlock x:Name="BodyText" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,2,0,0"
                            TextTrimming="CharacterEllipsis"/>
             </StackPanel>
+            <!-- optional action, e.g. "Edit" on "Clip saved" -->
+            <Button x:Name="ActionButton" Grid.Column="2" Style="{StaticResource BaseButton}" Visibility="Collapsed"
+                    Margin="12,0,0,0" Padding="12,6" VerticalAlignment="Center" Click="Action_Click" Focusable="False">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Style="{StaticResource Icon}" Text="&#xE70F;" FontSize="11" Margin="0,0,7,0"/>
+                    <TextBlock x:Name="ActionText" FontSize="12.5"/>
+                </StackPanel>
+            </Button>
         </Grid>
     </Border>
 </Window>

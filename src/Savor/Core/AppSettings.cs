@@ -156,6 +156,8 @@ public sealed class AppSettings
     public HotkeyBinding SaveClipHotkey { get; set; } = new(ModifierKeys.Alt, Key.F10);
     public HotkeyBinding RecordHotkey { get; set; } = new(ModifierKeys.Alt, Key.F9);
     public HotkeyBinding BufferHotkey { get; set; } = new(ModifierKeys.Alt, Key.F8);
+    /// <summary>Drops a marker at the current moment (shown on the editor's timeline).</summary>
+    public HotkeyBinding MarkerHotkey { get; set; } = new(ModifierKeys.Alt, Key.F7);
 
     public bool CloseToTray { get; set; } = true;
     public bool ShowNotifications { get; set; } = true;
@@ -221,6 +223,7 @@ public sealed class AppSettings
         SaveClipHotkey ??= new();
         RecordHotkey ??= new();
         BufferHotkey ??= new();
+        MarkerHotkey ??= new();
         return this;
     }
 }

@@ -181,7 +181,9 @@ public static class Library
 
     static string Retag(string path, bool recording, string? oldGame, string? newGame)
     {
-        new ClipMeta(recording ? ClipMeta.Recording : ClipMeta.Clip, newGame).Write(path);
+        var kind = recording ? ClipMeta.Recording : ClipMeta.Clip;
+        var cur = ClipMeta.Read(path); // keep its markers
+        (cur is null ? new ClipMeta(kind, newGame) : cur with { Kind = kind, Game = newGame }).Write(path);
         var name = Path.GetFileNameWithoutExtension(path);
         var pre = ClipMeta.StampedPrefix(name);
         if (pre == null) return path; // the user's own name: leave it

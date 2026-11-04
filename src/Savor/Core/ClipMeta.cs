@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace Savor.Core;
@@ -21,6 +23,9 @@ public sealed record ClipMeta(string Kind, string? Game)
 
     public bool IsRecording => Kind == Recording;
 
+    /// <summary>Moments marked with the marker hotkey, in seconds from the start of the file.</summary>
+    public double[] Markers { get; init; } = Array.Empty<double>();
+
     /// <summary>The game part of a Savor-made name ("VALORANT 2026-10-30 21.14.05" → "VALORANT"), or null.</summary>
     public static string? StampedPrefix(string name)
     {
@@ -34,6 +39,8 @@ public sealed record ClipMeta(string Kind, string? Game)
         {
             var lines = new List<string> { "kind=" + Kind };
             if (!string.IsNullOrWhiteSpace(Game)) lines.Add("game=" + Game.Replace('\n', ' ').Replace('\r', ' '));
+            if (Markers.Length > 0)
+                lines.Add("markers=" + string.Join(",", Markers.Select(m => m.ToString("0.###", CultureInfo.InvariantCulture))));
             // writing the stream counts as modifying the file: keep its date so the library order doesn't change
             var when = File.GetLastWriteTimeUtc(path);
             File.WriteAllLines(path + Stream, lines);
@@ -53,12 +60,17 @@ public sealed record ClipMeta(string Kind, string? Game)
             {
                 string kind = Clip;
                 string? game = null;
+                var markers = new List<double>();
                 foreach (var line in lines)
                 {
                     if (line.StartsWith("kind=")) kind = line[5..].Trim();
                     else if (line.StartsWith("game=")) game = line[5..].Trim();
+                    else if (line.StartsWith("markers="))
+                        foreach (var part in line[8..].Split(',', StringSplitOptions.RemoveEmptyEntries))
+                            if (double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out var m) && m >= 0) markers.Add(m);
                 }
-                return new ClipMeta(kind == Recording ? Recording : Clip, string.IsNullOrWhiteSpace(game) ? null : game);
+                return new ClipMeta(kind == Recording ? Recording : Clip, string.IsNullOrWhiteSpace(game) ? null : game)
+                    { Markers = markers.OrderBy(m => m).ToArray() };
             }
         }
         catch { }

@@ -146,7 +146,9 @@ jobs:
           $sj | ConvertTo-Json -Depth 8 | Out-File $sf -Encoding utf8
           $env:SAVOR_SELFTEST_TRAY = "1"
           $p = Start-Process publish/Savor.exe -PassThru
-          Start-Sleep 55
+          Start-Sleep 40
+          [System.Windows.Forms.SendKeys]::SendWait("%{F7}")   # marker hotkey, from the tray
+          Start-Sleep 15
           $p.Refresh()
           $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
           $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"

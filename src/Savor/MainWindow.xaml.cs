@@ -299,9 +299,45 @@ public partial class MainWindow : Window
         if (_settings.PlaySaveSound) Chime.Play(_settings.SaveSoundVolume);
         ReloadClips();
         if (_settings.ShowNotifications)
-            Notify(recording ? "Recording saved" : "Clip saved", Path.GetFileName(path), onClick: () => Reveal(path));
+            ToastWindow.Notify(recording ? "Recording saved" : "Clip saved", Path.GetFileName(path),
+                onClick: () => Reveal(path), actionText: "Edit", action: () => EditFromToast(path));
         _ = EnforceStorageAsync(path);
     }
+
+    /// <summary>"Edit" on the saved toast: bring Savor up with the capture open in the editor.</summary>
+    void EditFromToast(string path)
+    {
+        ShowFromTray();
+        if (_editor is { IsBusy: true })
+        {
+            Notify("Export in progress", "Open the clip once the current export has finished.");
+            return;
+        }
+        if (SettingsPage.Visibility == Visibility.Visible)
+        {
+            if (_capturingHotkey != null) EndHotkeyCapture();
+            SettingsPage.Visibility = Visibility.Collapsed;
+            _ = ApplyCaptureChangesAsync();
+        }
+        OpenEditor(path);
+    }
+
+    // ===================== markers =====================
+
+    void AddMarker()
+    {
+        if (_engine.AddMarker())
+        {
+            SelfLog("marker added");
+            if (_settings.ShowNotifications)
+                Notify("Marker added", _engine.Recording
+                    ? $"At {FormatElapsed(DateTime.UtcNow - _engine.RecordingStartedUtc)} in your recording."
+                    : "It will show on the timeline of your next clip.");
+        }
+        else Notify("Nothing to mark", "Turn on the replay buffer or start recording first.", error: true);
+    }
+
+    static string FormatElapsed(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
     // ===================== storage =====================
 
@@ -1818,9 +1854,13 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(dir);
             var f = Path.Combine(dir, "VALORANT 2026-10-30 21.14.05.mp4");
             File.WriteAllBytes(f, new byte[16]);
-            new ClipMeta(ClipMeta.Recording, "VALORANT").Write(f);
+            new ClipMeta(ClipMeta.Recording, "VALORANT") { Markers = new[] { 1.5, 7.25 } }.Write(f);
             var renamed = Library.Rename(f, "my best ace: round 12");
             var m = ClipMeta.Read(renamed);
+            var regamed = Library.SetGame(Library.Scan(dir).First(x => x.FilePath == renamed), "Valorant 2");
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"marker meta: after rename [{string.Join(",", m?.Markers ?? Array.Empty<double>())}], after game change [{string.Join(",", ClipMeta.Read(regamed)?.Markers ?? Array.Empty<double>())}]\n");
+            Library.SetGame(Library.Scan(dir).First(x => x.FilePath == regamed), "VALORANT");
             var scan = Library.Scan(dir);
             var guess = ClipMeta.FromName("Rocket League Recording 2026-10-30 21.14.05");
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
@@ -1902,6 +1942,7 @@ public partial class MainWindow : Window
 
         try
         {
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await _editor.SelfTestMarkersAsync() + "\n");
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await _editor.SelfTestEarlyScrubAsync() + "\n");
             var result = await _editor.SelfTestScrubAsync();
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), result + "\n");
@@ -2033,9 +2074,10 @@ public partial class MainWindow : Window
         _hotkeys.Register(_settings.SaveClipHotkey, () => _ = SaveClipAsync());
         _hotkeys.Register(_settings.RecordHotkey, () => _ = ToggleRecordAsync());
         _hotkeys.Register(_settings.BufferHotkey, () => _ = ToggleBufferAsync());
+        _hotkeys.Register(_settings.MarkerHotkey, AddMarker);
 
         // flag the same shortcut used for two actions
-        var all = new[] { _settings.SaveClipHotkey, _settings.RecordHotkey, _settings.BufferHotkey }
+        var all = new[] { _settings.SaveClipHotkey, _settings.RecordHotkey, _settings.BufferHotkey, _settings.MarkerHotkey }
             .Where(h => !h.IsEmpty).Select(h => h.ToString()).ToList();
         var dupes = all.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         HotkeyNote.Text = dupes.Count == 0 ? HotkeyHelp : $"{string.Join(", ", dupes)} is set for more than one action — it will trigger both.";
@@ -2046,6 +2088,7 @@ public partial class MainWindow : Window
     {
         "save" => _settings.SaveClipHotkey,
         "record" => _settings.RecordHotkey,
+        "marker" => _settings.MarkerHotkey,
         _ => _settings.BufferHotkey
     };
 
@@ -2055,6 +2098,7 @@ public partial class MainWindow : Window
         {
             case "save": _settings.SaveClipHotkey = hk; break;
             case "record": _settings.RecordHotkey = hk; break;
+            case "marker": _settings.MarkerHotkey = hk; break;
             default: _settings.BufferHotkey = hk; break;
         }
     }
@@ -2135,7 +2179,7 @@ public partial class MainWindow : Window
     void HotkeyClear_Click(object sender, RoutedEventArgs e)
     {
         var tag = (string)((Button)sender).Tag;
-        var target = tag switch { "save" => SaveClipHotkeyButton, "record" => RecordHotkeyButton, _ => BufferHotkeyButton };
+        var target = tag switch { "save" => SaveClipHotkeyButton, "record" => RecordHotkeyButton, "marker" => MarkerHotkeyButton, _ => BufferHotkeyButton };
         if (_capturingHotkey != null) EndHotkeyCapture();
         SetBinding(target, new HotkeyBinding());
         _settings.Save();
@@ -2227,6 +2271,7 @@ public partial class MainWindow : Window
             SaveClipHotkeyButton.Content = _settings.SaveClipHotkey.ToString();
             RecordHotkeyButton.Content = _settings.RecordHotkey.ToString();
             BufferHotkeyButton.Content = _settings.BufferHotkey.ToString();
+            MarkerHotkeyButton.Content = _settings.MarkerHotkey.ToString();
 
             StartupToggle.IsChecked = StartupManager.IsEnabled;
             TrayToggle.IsChecked = _settings.CloseToTray;

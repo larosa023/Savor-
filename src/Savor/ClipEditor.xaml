@@ -159,6 +159,8 @@
                   LostMouseCapture="Timeline_LostCapture" SizeChanged="Timeline_SizeChanged">
                 <Border CornerRadius="6" Background="{StaticResource Surface2Brush}" Height="28" VerticalAlignment="Center"
                         Margin="18,0"/>
+                <!-- markers from the marker hotkey (drawn under the handles and playhead) -->
+                <Canvas x:Name="MarkerLayer" IsHitTestVisible="False"/>
                 <Canvas x:Name="TimelineCanvas" IsHitTestVisible="False" ClipToBounds="False">
                     <Border x:Name="SelBand" Height="28" Canvas.Top="8" Width="100" Background="{StaticResource AccentSoftBrush}"
                             BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,2" RenderTransformOrigin="0,0">

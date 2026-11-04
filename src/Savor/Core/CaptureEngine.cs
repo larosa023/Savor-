@@ -55,6 +55,34 @@ public sealed class CaptureEngine : IDisposable
     public bool BufferActive { get; private set; }
     public bool Recording { get; private set; }
     public DateTime RecordingStartedUtc { get; private set; }
+
+    // ---- markers (marker hotkey) ----
+    readonly List<DateTime> _markers = new();
+
+    /// <summary>Marks this moment for the next clip / the recording. False when nothing is being captured.</summary>
+    public bool AddMarker()
+    {
+        if (!BufferActive && !Recording) return false;
+        lock (_markers)
+        {
+            var now = DateTime.UtcNow;
+            _markers.Add(now);
+            // keep what a clip or the running recording could still include
+            var keepAfter = Recording ? RecordingStartedUtc.AddMinutes(-1) : now.AddMinutes(-15);
+            _markers.RemoveAll(m => m < keepAfter);
+        }
+        return true;
+    }
+
+    /// <summary>Marker times as seconds into a file whose first piece is <paramref name="firstSegment"/>.</summary>
+    double[] MarkersSince(string firstSegment)
+    {
+        DateTime start;
+        try { start = File.GetCreationTimeUtc(firstSegment); } catch { return Array.Empty<double>(); }
+        var now = DateTime.UtcNow;
+        lock (_markers)
+            return _markers.Where(m => m >= start && m <= now).Select(m => (m - start).TotalSeconds).ToArray();
+    }
     string? _recordGame; // the game in focus when recording started (names the file)
     public DateTime StartedUtc { get; private set; }
     public bool IsRunning => _proc is { HasExited: false };
@@ -125,8 +153,9 @@ public sealed class CaptureEngine : IDisposable
             {
                 var game = ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game ?? "Clip", s);
+                var markers = MarkersSince(pick[0].Path);
                 if (!await ConcatAsync(pick.Select(p => p.Path).ToList(), output, s)) return null;
-                new ClipMeta(ClipMeta.Clip, game).Write(output);
+                new ClipMeta(ClipMeta.Clip, game) { Markers = markers }.Write(output);
                 return output;
             }
             finally { _holdFrom = int.MaxValue; }
@@ -174,10 +203,11 @@ public sealed class CaptureEngine : IDisposable
             {
                 var game = _recordGame ?? ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game != null ? game + " Recording" : "Recording", s);
+                var markers = MarkersSince(segs[0].Path);
                 if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s))
                 {
                     result = output;
-                    new ClipMeta(ClipMeta.Recording, game).Write(output);
+                    new ClipMeta(ClipMeta.Recording, game) { Markers = markers }.Write(output);
                 }
             }
             _holdFrom = int.MaxValue;

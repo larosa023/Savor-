@@ -79,6 +79,8 @@ public partial class ClipEditor : UserControl
         _playing = false;
         _duration = _in = _out = TimeSpan.Zero;
         TitleText.Text = Path.GetFileNameWithoutExtension(path);
+        _markers = ClipMeta.Read(path)?.Markers ?? Array.Empty<double>();
+        MarkerLayer.Children.Clear();
         try
         {
             var fi = new FileInfo(path);
@@ -246,6 +248,7 @@ public partial class ClipEditor : UserControl
             Seek(Clamp(r.pos, TimeSpan.Zero, _duration));
         }
         StartFilmstrip();
+        DrawMarkers();
         UpdateTimeline();
         UpdateTrimText();
         LayoutCrop();
@@ -530,6 +533,8 @@ public partial class ClipEditor : UserControl
             case Key.Right: Seek(Now + TimeSpan.FromSeconds(shift ? 5 : 1.0 / 30)); break;
             case Key.I: SetIn(Now); break;
             case Key.O: SetOut(Now); break;
+            case Key.OemOpenBrackets: JumpMarker(-1); break;   // [ previous marker
+            case Key.OemCloseBrackets: JumpMarker(1); break;   // ] next marker
             case Key.Home: Seek(_in); break;
             case Key.End: Seek(_out); break;
             case Key.Escape: RequestClose(); break;
@@ -634,9 +639,60 @@ public partial class ClipEditor : UserControl
         }
     }
 
+    // ===================== markers =====================
+
+    double[] _markers = Array.Empty<double>();
+    static readonly Brush MarkerBrush = MakeMarkerBrush();
+    static Brush MakeMarkerBrush() { var b = new SolidColorBrush(Color.FromRgb(0xF5, 0xC5, 0x42)); b.Freeze(); return b; }
+
+    /// <summary>Small yellow ticks under the timeline, one per marker (redrawn only on open / resize).</summary>
+    void DrawMarkers()
+    {
+        MarkerLayer.Children.Clear();
+        if (_duration <= TimeSpan.Zero) return;
+        foreach (var m in _markers)
+        {
+            if (m > _duration.TotalSeconds + 0.5) continue;
+            double x = X(TimeSpan.FromSeconds(m));
+            var line = new System.Windows.Shapes.Rectangle { Width = 2, Height = 28, Fill = MarkerBrush, Opacity = 0.55, RadiusX = 1, RadiusY = 1 };
+            Canvas.SetLeft(line, x - 1);
+            Canvas.SetTop(line, 8);
+            var dot = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 0,4 L 4,0 L 8,4 L 4,8 Z"),
+                Fill = MarkerBrush,
+            };
+            Canvas.SetLeft(dot, x - 4);
+            Canvas.SetTop(dot, 36);
+            MarkerLayer.Children.Add(line);
+            MarkerLayer.Children.Add(dot);
+        }
+    }
+
+    /// <summary>A marker within a few pixels of <paramref name="x"/> (so clicking near one lands exactly on it).</summary>
+    TimeSpan? MarkerNear(double x)
+    {
+        foreach (var m in _markers)
+        {
+            var t = TimeSpan.FromSeconds(m);
+            if (t <= _duration && Math.Abs(X(t) - x) <= 6) return t;
+        }
+        return null;
+    }
+
+    void JumpMarker(int dir)
+    {
+        if (_markers.Length == 0) return;
+        double now = Now.TotalSeconds;
+        double? target = dir > 0 ? _markers.Where(m => m > now + 0.05).Cast<double?>().FirstOrDefault()
+                                 : _markers.Where(m => m < now - 0.05).Cast<double?>().LastOrDefault();
+        if (target is { } t) Seek(TimeSpan.FromSeconds(t));
+    }
+
     void Timeline_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         SelBand.Width = Math.Max(1, TrackWidth);
+        DrawMarkers();
         UpdateTimeline();
     }
 
@@ -668,7 +724,7 @@ public partial class ClipEditor : UserControl
             _drag = Drag.Scrub;
             _wasPlaying = _playing;
             if (_playing) Pause();
-            Seek(T(x));
+            Seek(MarkerNear(x) ?? T(x));
         }
         if (_drag != Drag.Scrub)
         {
@@ -803,6 +859,20 @@ public partial class ClipEditor : UserControl
     public string AudioDiag() =>
         $"audio tracks={_tracks.Count} [{string.Join(", ", _tracks.Select(t => t.Name))}], listening={string.Join("+", _listen)}, " +
         $"player ready={_audio?.Ready == true}, status=\"{ListenStatus.Text}\", windows player muted={Player.IsMuted}";
+
+    /// <summary>CI only: markers draw on the timeline and [ / ] jump between them.</summary>
+    public async Task<string> SelfTestMarkersAsync()
+    {
+        _markers = new[] { 2.0, 5.0 };
+        DrawMarkers();
+        Seek(TimeSpan.Zero); FlushSeek(TimeSpan.Zero);
+        JumpMarker(1); var a = Now.TotalSeconds;
+        JumpMarker(1); var b = Now.TotalSeconds;
+        JumpMarker(-1); var c = Now.TotalSeconds;
+        var near = MarkerNear(X(TimeSpan.FromSeconds(5)) + 3);
+        await Task.Delay(100);
+        return $"markers: drawn={MarkerLayer.Children.Count / 2}, next→{a:0.0}s, next→{b:0.0}s, prev→{c:0.0}s, click near 5s snaps to {near?.TotalSeconds:0.0}s";
+    }
 
     /// <summary>CI only: right after opening, how soon can the far end of the clip be previewed?</summary>
     public async Task<string> SelfTestEarlyScrubAsync()
@@ -1139,7 +1209,11 @@ public partial class ClipEditor : UserControl
             }
             else
             {
-                meta?.Write(output);
+                // markers follow the trim and speed
+                var kept = (meta?.Markers ?? Array.Empty<double>())
+                    .Where(m => m >= req.Start.TotalSeconds && m <= req.End.TotalSeconds)
+                    .Select(m => (m - req.Start.TotalSeconds) / Math.Max(0.1, speed)).ToArray();
+                (meta is null ? null : meta with { Markers = kept })?.Write(output);
                 ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
                 Exported?.Invoke(output);
             }

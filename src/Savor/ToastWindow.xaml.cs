@@ -14,9 +14,20 @@ public partial class ToastWindow : Window
     readonly Action? _onClick;
     readonly DispatcherTimer _timer;
 
-    ToastWindow(string title, string body, bool error, Action? onClick)
+    readonly Action? _action;
+
+    ToastWindow(string title, string body, bool error, Action? onClick, string? actionText = null, Action? action = null)
     {
         InitializeComponent();
+        _action = action;
+        if (action != null && actionText != null)
+        {
+            ActionText.Text = actionText;
+            ActionButton.Visibility = Visibility.Visible;
+        }
+        // stay put while the mouse is on it, so the button can be clicked
+        MouseEnter += (_, _) => { _timer?.Stop(); BeginAnimation(OpacityProperty, null); Opacity = 1; };
+        MouseLeave += (_, _) => _timer?.Start();
         TitleText.Text = title;
         BodyText.Text = body;
         _onClick = onClick;
@@ -26,7 +37,7 @@ public partial class ToastWindow : Window
             Glyph.Foreground = (Brush)FindResource("RecBrush");
             Glyph.Text = "";
         }
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(error ? 6 : 3.5) };
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(error ? 6 : action != null ? 5 : 3.5) };
         _timer.Tick += (_, _) => FadeOut();
         Loaded += (_, _) =>
         {
@@ -38,11 +49,19 @@ public partial class ToastWindow : Window
         };
     }
 
-    public static void Notify(string title, string body, bool error = false, Action? onClick = null)
+    public static void Notify(string title, string body, bool error = false, Action? onClick = null,
+                              string? actionText = null, Action? action = null)
     {
         _current?.Close();
-        _current = new ToastWindow(title, body, error, onClick);
+        _current = new ToastWindow(title, body, error, onClick, actionText, action);
         _current.Show();
+    }
+
+    void Action_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true; // not also the toast's own click
+        _action?.Invoke();
+        FadeOut();
     }
 
     void FadeOut()
