@@ -74,14 +74,30 @@ public sealed class CaptureEngine : IDisposable
         return true;
     }
 
-    /// <summary>Marker times as seconds into a file whose first piece is <paramref name="firstSegment"/>.</summary>
-    double[] MarkersSince(string firstSegment)
+    static readonly System.Text.RegularExpressions.Regex DurationRx = new(@"Duration: (\d+):(\d+):([\d.]+)");
+
+    /// <summary>
+    /// Marker times as seconds into a saved file. The file ends when its last piece was last written, and its
+    /// length comes from the file itself (piece creation times can't be trusted: Windows reuses them for
+    /// re-created file names).
+    /// </summary>
+    async Task<double[]> MarkersInAsync(string output, string lastSegment)
     {
-        DateTime start;
-        try { start = File.GetCreationTimeUtc(firstSegment); } catch { return Array.Empty<double>(); }
-        var now = DateTime.UtcNow;
-        lock (_markers)
-            return _markers.Where(m => m >= start && m <= now).Select(m => (m - start).TotalSeconds).ToArray();
+        lock (_markers) if (_markers.Count == 0) return Array.Empty<double>();
+        try
+        {
+            var end = File.GetLastWriteTimeUtc(lastSegment);
+            var (_, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-i", output }, TimeSpan.FromSeconds(10));
+            var m = DurationRx.Match(err);
+            if (!m.Success) return Array.Empty<double>();
+            double dur = int.Parse(m.Groups[1].Value) * 3600 + int.Parse(m.Groups[2].Value) * 60 +
+                         double.Parse(m.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var start = end - TimeSpan.FromSeconds(dur);
+            lock (_markers)
+                return _markers.Where(t => t >= start && t <= end.AddSeconds(1))
+                               .Select(t => Math.Clamp((t - start).TotalSeconds, 0, dur)).ToArray();
+        }
+        catch { return Array.Empty<double>(); }
     }
     string? _recordGame; // the game in focus when recording started (names the file)
     public DateTime StartedUtc { get; private set; }
@@ -153,8 +169,8 @@ public sealed class CaptureEngine : IDisposable
             {
                 var game = ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game ?? "Clip", s);
-                var markers = MarkersSince(pick[0].Path);
                 if (!await ConcatAsync(pick.Select(p => p.Path).ToList(), output, s)) return null;
+                var markers = await MarkersInAsync(output, pick[^1].Path);
                 new ClipMeta(ClipMeta.Clip, game) { Markers = markers }.Write(output);
                 return output;
             }
@@ -203,11 +219,10 @@ public sealed class CaptureEngine : IDisposable
             {
                 var game = _recordGame ?? ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
                 var output = OutputPath(game != null ? game + " Recording" : "Recording", s);
-                var markers = MarkersSince(segs[0].Path);
                 if (await ConcatAsync(segs.Select(x => x.Path).ToList(), output, s))
                 {
                     result = output;
-                    new ClipMeta(ClipMeta.Recording, game) { Markers = markers }.Write(output);
+                    new ClipMeta(ClipMeta.Recording, game) { Markers = await MarkersInAsync(output, segs[^1].Path) }.Write(output);
                 }
             }
             _holdFrom = int.MaxValue;
