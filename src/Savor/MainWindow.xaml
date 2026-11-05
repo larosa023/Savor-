@@ -655,10 +655,11 @@
                                     <TextBlock Text="Game"/>
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="SelJoinButton" Style="{StaticResource GhostButton}" Click="SelJoin_Click" ToolTip="Join into one video, oldest first">
+                            <Button x:Name="SelJoinButton" Style="{StaticResource GhostButton}" Click="SelJoin_Click"
+                                    ToolTip="Merge into one video (oldest first), then trim it in the editor">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Style="{StaticResource Icon}" Text="&#xE71B;" FontSize="12" Margin="0,0,7,0"/>
-                                    <TextBlock Text="Join"/>
+                                    <TextBlock Text="Merge"/>
                                 </StackPanel>
                             </Button>
                             <Button Style="{StaticResource GhostButton}" Click="SelCopy_Click" ToolTip="Copy the files (paste into Discord or a folder)">

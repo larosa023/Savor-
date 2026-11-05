@@ -1331,26 +1331,42 @@ public partial class MainWindow : Window
 
     bool _joining;
 
+    /// <summary>Merge the selected clips (oldest first) into one video and open it in the editor to trim.</summary>
     async void SelJoin_Click(object sender, RoutedEventArgs e)
     {
         var sel = SelectedClips().OrderBy(c => c.Created).ToList();
         if (sel.Count < 2 || _joining) return;
         _joining = true;
         SelJoinButton.IsEnabled = false;
+        StopHover();
+        string? output = null;
         try
         {
-            var progress = new Progress<double>(p => SelectionText.Text = $"Joining… {p * 100:0}%");
-            SelectionText.Text = "Joining…";
-            var output = await Task.Run(() => ClipJoiner.JoinAsync(sel.Select(c => c.FilePath).ToList(),
+            var progress = new Progress<double>(p => SelectionText.Text = $"Merging… {p * 100:0}%");
+            SelectionText.Text = "Merging…";
+            var result = await Task.Run(() => ClipJoiner.JoinAsync(sel.Select(c => c.FilePath).ToList(),
                 _engine.Encoder?.Def, _settings.Quality, progress, CancellationToken.None));
-            // the joined video belongs to the first clip's game
-            new ClipMeta(ClipMeta.Clip, ClipMeta.Read(sel[0].FilePath)?.Game).Write(output);
-            Notify("Joined", $"{sel.Count} clips → {Path.GetFileName(output)}");
+            output = result.Path;
+
+            // markers: one where each clip starts (so the seams are easy to find while trimming), plus each clip's own
+            var markers = new List<double>();
+            for (int i = 0; i < sel.Count; i++)
+            {
+                if (i > 0) markers.Add(result.Starts[i]);
+                foreach (var m in ClipMeta.Read(sel[i].FilePath)?.Markers ?? Array.Empty<double>())
+                    markers.Add(result.Starts[i] + m);
+            }
+            // the merged video belongs to the first clip's game
+            new ClipMeta(ClipMeta.Clip, ClipMeta.Read(sel[0].FilePath)?.Game)
+                { Markers = markers.Distinct().OrderBy(m => m).ToArray() }.Write(output);
             _joining = false;
             ClearSelection();
         }
-        catch (Exception ex) { Notify("Couldn't join", ex.Message, error: true); }
+        catch (Exception ex) { Notify("Couldn't merge", ex.Message, error: true); }
         finally { _joining = false; ReloadClips(); }
+
+        // straight into the editor: trim the start / end, cut at the yellow markers, export
+        if (output != null && File.Exists(output)) OpenEditor(output);
     }
 
     /// <summary>"All · Valorant 12 · Minecraft 3" chips; only shown once some captures have a game.</summary>
@@ -1758,9 +1774,11 @@ public partial class MainWindow : Window
         await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = copy1, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(3), Fast = true },
             enc, _settings.Quality, null, CancellationToken.None);
         var copy2 = Path.Combine(dir, "b.mp4"); File.Copy(copy1, copy2);
-        var joined = await ClipJoiner.JoinAsync(new List<string> { copy1, copy2 }, enc, _settings.Quality, null, CancellationToken.None);
+        var joinedResult = await ClipJoiner.JoinAsync(new List<string> { copy1, copy2 }, enc, _settings.Quality, null, CancellationToken.None);
+        var joined = joinedResult.Path;
+        sb.Append($"merge starts: [{string.Join(", ", joinedResult.Starts.Select(x => x.ToString("0.00")))}]; ");
         sb.Append($"join same: {await Dur(joined)}; ");
-        var mixed = await ClipJoiner.JoinAsync(new List<string> { copy1, gif }, enc, _settings.Quality, null, CancellationToken.None);
+        var mixed = (await ClipJoiner.JoinAsync(new List<string> { copy1, gif }, enc, _settings.Quality, null, CancellationToken.None)).Path;
         sb.Append($"join different: {await Dur(mixed)}; ");
 
         var item = Library.Scan(dir).First(c => c.FilePath == copy1);

@@ -54,8 +54,12 @@ public static class ClipJoiner
             f.Success ? double.Parse(f.Groups[1].Value, CultureInfo.InvariantCulture) : 60, audio, dur, sig.ToString());
     }
 
-    /// <summary>Returns the path of the joined video (next to the first clip).</summary>
-    public static async Task<string> JoinAsync(List<string> inputs, EncoderDef? encoder, QualityPreset quality,
+    /// <param name="Path">The merged video (next to the first clip).</param>
+    /// <param name="Starts">Where each input begins in the merged video, in seconds.</param>
+    public sealed record JoinResult(string Path, double[] Starts);
+
+    /// <summary>Merges the inputs in order. Returns the new file and where each input starts in it.</summary>
+    public static async Task<JoinResult> JoinAsync(List<string> inputs, EncoderDef? encoder, QualityPreset quality,
                                                IProgress<double>? progress, CancellationToken ct)
     {
         if (Ffmpeg.Path == null) throw new InvalidOperationException("FFmpeg isn't available.");
@@ -68,7 +72,7 @@ public static class ClipJoiner
         var first = inputs[0];
         var dir = Path.GetDirectoryName(first)!;
         var ext = Path.GetExtension(first).ToLowerInvariant() is ".mkv" ? ".mkv" : ".mp4";
-        var baseName = Path.GetFileNameWithoutExtension(first) + " (joined)";
+        var baseName = Path.GetFileNameWithoutExtension(first) + " (merged)";
         var output = Path.Combine(dir, baseName + ext);
         for (int n = 2; File.Exists(output); n++) output = Path.Combine(dir, $"{baseName} {n}{ext}");
         var tmp = Path.Combine(dir, $".savor-join-{Guid.NewGuid():N}{ext}");
@@ -92,7 +96,9 @@ public static class ClipJoiner
                 }
             }
             File.Move(tmp, output);
-            return output;
+            var starts = new double[infos.Count];
+            for (int i = 1; i < infos.Count; i++) starts[i] = starts[i - 1] + infos[i - 1].Duration;
+            return new JoinResult(output, starts);
         }
         finally
         {

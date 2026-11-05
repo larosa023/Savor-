@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.2 · Nov 5, 2026
+- Merge clips, then trim: select two or more captures and press Merge (formerly Join). The merged video opens straight in the editor, with a yellow marker where each clip starts so the seams are easy to find. Each clip's own markers come along too.
+
 ## 0.9.1 · Nov 3, 2026
 - Markers: press Alt + F7 in-game to mark a moment (change it in Settings → Hotkeys). Markers show as yellow ticks on the editor's timeline — click near one to jump to it, or press [ and ] to go to the previous / next marker. They stay with the clip through trims, speed changes, renames and game changes.
 - “Clip saved” notifications now have an Edit button that opens the clip straight in the editor. Hovering the notification keeps it on screen.
