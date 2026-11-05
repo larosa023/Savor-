@@ -1808,6 +1808,51 @@ public partial class MainWindow : Window
         return "library: " + sb;
     }
 
+    /// <summary>CI only: the capture's audio input (timestamped pipe + sync) with real-time audio fed like the mixer does.</summary>
+    static async Task<string> SelfTestAudioPipeAsync()
+    {
+        if (Ffmpeg.Path == null) return "audio pipe: no ffmpeg";
+        var dir = Path.Combine(AppSettings.LocalDataDir, "pipe-test");
+        Directory.CreateDirectory(dir);
+        var outFile = Path.Combine(dir, "seg_%03d.ts");
+        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-nostdin",
+            "-f", "lavfi", "-i", "color=black:s=320x180:r=30,realtime" };
+        args.AddRange(CaptureEngine.AudioInputArgs(48000, 6));
+        args.AddRange(new[] { "-filter_complex", $"[1:a]{CaptureEngine.AudioSync},asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]",
+            "-map", "0:v", "-map", "[a0]", "-map", "[a1]", "-map", "[a2]", "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "aac", "-ar", "48000", "-shortest", "-t", "4", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", outFile });
+        var psi = Ffmpeg.StartInfo(args, redirectInput: true);
+        using var p = Process.Start(psi)!;
+        var errTask = p.StandardError.ReadToEndAsync();
+        await Task.Delay(400); // like Savor: audio builds up while ffmpeg starts
+        var stdin = p.StandardInput.BaseStream;
+        var chunk = new byte[480 * 6 * 4]; // 10 ms, 6 channels
+        var sw = Stopwatch.StartNew();
+        long sent = 0;
+        try
+        {
+            while (!p.HasExited && sw.Elapsed < TimeSpan.FromSeconds(6))
+            {
+                long due = (long)(sw.Elapsed.TotalSeconds * 100) + 40; // + the 400 ms backlog
+                while (sent < due) { await stdin.WriteAsync(chunk); sent++; }
+                await Task.Delay(5);
+            }
+        }
+        catch { }
+        try { p.StandardInput.Close(); } catch { }
+        await p.WaitForExitAsync();
+        var err = (await errTask).Trim();
+        var segs = Directory.GetFiles(dir, "*.ts");
+        string info = "";
+        if (segs.Length > 0)
+        {
+            var (_, e) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", segs[0] }, TimeSpan.FromSeconds(10));
+            info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, "Audio:").Count}";
+        }
+        try { Directory.Delete(dir, true); } catch { }
+        return $"audio pipe: exit={p.ExitCode}, pieces={segs.Length}, {info}{(err.Length > 0 ? " | ffmpeg: " + err.Replace('\n', ' ')[..Math.Min(300, err.Length)] : "")}";
+    }
+
     /// <summary>CI only: runs the mic noise suppression graph on synthetic noise and compares levels.</summary>
     static async Task<string> SelfTestNoiseAsync()
     {
@@ -1934,6 +1979,9 @@ public partial class MainWindow : Window
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestLibraryAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "library: FAILED " + ex + "\n"); }
+
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestAudioPipeAsync() + "\n"); }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio pipe: FAILED " + ex.Message + "\n"); }
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestNoiseAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "noise: FAILED " + ex.Message + "\n"); }

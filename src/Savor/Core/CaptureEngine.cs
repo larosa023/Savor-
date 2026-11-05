@@ -369,7 +369,14 @@ public sealed class CaptureEngine : IDisposable
     }
 
     /// <summary>Keeps the piped audio locked to its arrival timestamps (see BuildArgs).</summary>
-    const string AudioSync = "aresample=async=1000:first_pts=0";
+    public const string AudioSync = "aresample=async=1000:first_pts=0";
+
+    /// <summary>The piped raw-audio input, stamped with arrival time (see BuildArgs).</summary>
+    public static string[] AudioInputArgs(int rate, int channels) => new[]
+    {
+        "-itsoffset", "-0.03", "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
+        "-f", "f32le", "-ar", rate.ToString(), "-ac", channels.ToString(), "-i", "pipe:0"
+    };
 
     List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate)
     {
@@ -400,9 +407,7 @@ public sealed class CaptureEngine : IDisposable
             // the time it arrives (same clock as the screen capture) and aresample=async keeps it locked to that:
             // start-up backlog is dropped, drift is gently corrected. -30 ms covers the remaining capture/pipe latency
             // (measured: ~±8 ms afterwards, vs a constant 300 ms off before).
-            a.AddRange(new[] { "-itsoffset", "-0.03", "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
-                               "-f", "f32le", "-ar", rate.ToString(), "-ac", (Math.Max(_inputSlots, _trackNames.Length) * 2).ToString(),
-                               "-i", "pipe:0" });
+            a.AddRange(AudioInputArgs(rate, Math.Max(_inputSlots, _trackNames.Length) * 2));
         }
 
         int tracks = audio ? Math.Max(1, _trackNames.Length) : 0;
