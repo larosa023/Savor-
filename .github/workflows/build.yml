@@ -166,7 +166,9 @@ jobs:
               $dur = if ($info -match "Duration: ([0-9:.]+)") { $Matches[1] } else { "?" }
               $res = if ($info -match "Video: [^,]+, [^,]+, (\d{2,5}x\d{2,5})") { $Matches[1] } else { "?" }
               $meta = Get-Content -LiteralPath $c.FullName -Stream savor -ErrorAction SilentlyContinue
-              $l = "TRAY CLIP OK: $($c.Name) $([math]::Round($c.Length/1MB,1)) MB, duration $dur, video $res, info [$($meta -join '; ')]"
+              $aud = ([regex]::Matches($info, "Audio: ")).Count
+              $st = if ($info -match "Duration: [0-9:.]+, start: ([0-9.]+)") { $Matches[1] } else { "?" }
+              $l = "TRAY CLIP OK: $($c.Name) $([math]::Round($c.Length/1MB,1)) MB, duration $dur, start $st, video $res, audio tracks $aud, info [$($meta -join '; ')]"
               Write-Host "::notice::$l"; $l | Out-File diag.txt -Append
             }
           } else { Write-Host "::warning::TRAY CLIP MISSING"; "TRAY CLIP MISSING" | Out-File diag.txt -Append }

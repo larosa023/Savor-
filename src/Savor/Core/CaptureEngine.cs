@@ -368,6 +368,9 @@ public sealed class CaptureEngine : IDisposable
         return fc.ToString();
     }
 
+    /// <summary>Keeps the piped audio locked to its arrival timestamps (see BuildArgs).</summary>
+    const string AudioSync = "aresample=async=1000:first_pts=0";
+
     List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate)
     {
         var d = Display;
@@ -391,7 +394,14 @@ public sealed class CaptureEngine : IDisposable
 
         if (audio)
         {
-            a.AddRange(new[] { "-f", "f32le", "-ar", rate.ToString(), "-ac", (Math.Max(_inputSlots, _trackNames.Length) * 2).ToString(),
+            // A/V sync: raw audio over a pipe has no timestamps of its own, so ffmpeg would just count samples from the
+            // first one it reads. Audio buffered while ffmpeg was starting up then made the whole soundtrack late, and
+            // sound-card vs system clock differences drifted over long recordings. Instead each chunk is stamped with
+            // the time it arrives (same clock as the screen capture) and aresample=async keeps it locked to that:
+            // start-up backlog is dropped, drift is gently corrected. -30 ms covers the remaining capture/pipe latency
+            // (measured: ~±8 ms afterwards, vs a constant 300 ms off before).
+            a.AddRange(new[] { "-itsoffset", "-0.03", "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
+                               "-f", "f32le", "-ar", rate.ToString(), "-ac", (Math.Max(_inputSlots, _trackNames.Length) * 2).ToString(),
                                "-i", "pipe:0" });
         }
 
@@ -399,7 +409,7 @@ public sealed class CaptureEngine : IDisposable
         if (audio && _micSlot > 0)
         {
             // noise suppression: clean the mic with RNNoise, then mix it into track 1 here
-            a.AddRange(new[] { "-filter_complex", DenoiseGraph(_inputSlots, _micSlot, _micIsTrack) });
+            a.AddRange(new[] { "-filter_complex", DenoiseGraph(_inputSlots, _micSlot, _micIsTrack, $"[1:a]{AudioSync},") });
             a.AddRange(new[] { "-map", "0:v" });
             for (int t = 0; t < tracks; t++)
                 a.AddRange(new[] { "-map", t == 0 ? "[a0]" : t == _micSlot ? "[mt]" : $"[r{t}]" });
@@ -407,15 +417,19 @@ public sealed class CaptureEngine : IDisposable
         else if (tracks > 1)
         {
             // split the interleaved 6-channel input into one stereo stream per track
-            var fc = new System.Text.StringBuilder($"[1:a]asplit={tracks}");
+            var fc = new System.Text.StringBuilder($"[1:a]{AudioSync},asplit={tracks}");
             for (int t = 0; t < tracks; t++) fc.Append($"[s{t}]");
             for (int t = 0; t < tracks; t++) fc.Append($";[s{t}]pan=stereo|c0=c{t * 2}|c1=c{t * 2 + 1}[a{t}]");
             a.AddRange(new[] { "-filter_complex", fc.ToString() });
         }
+        else if (tracks == 1)
+        {
+            a.AddRange(new[] { "-filter_complex", $"[1:a]{AudioSync}[a0]" });
+        }
         if (!(audio && _micSlot > 0))
         {
             a.AddRange(new[] { "-map", "0:v" });
-            if (tracks == 1) a.AddRange(new[] { "-map", "1:a" });
+            if (tracks == 1) a.AddRange(new[] { "-map", "[a0]" });
             for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
         }
 

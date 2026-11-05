@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.3 · Nov 5, 2026
+- Fixed audio being out of sync with the video. Audio that piled up while capture was starting made the whole soundtrack late (about a third of a second), and long sessions could slowly drift. Audio is now timed against the same clock as the screen and kept locked to it. Clips saved before this update keep their offset.
+
 ## 0.9.2 · Nov 5, 2026
 - Merge clips, then trim: select two or more captures and press Merge (formerly Join). The merged video opens straight in the editor, with a yellow marker where each clip starts so the seams are easy to find. Each clip's own markers come along too.
 
