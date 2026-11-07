@@ -2610,7 +2610,10 @@ public partial class MainWindow : Window
 
         Line($"Savor {Updater.Current}  ·  {DateTime.Now:yyyy-MM-dd HH:mm}");
         const string nt = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-        Line($"Windows: {Reg(nt, "ProductName")} {Reg(nt, "DisplayVersion")} (build {Reg(nt, "CurrentBuild")})");
+        // Windows 11 still calls itself "Windows 10" in the registry; build 22000+ is Windows 11
+        var product = Reg(nt, "ProductName");
+        if (int.TryParse(Reg(nt, "CurrentBuild"), out var build) && build >= 22000) product = product.Replace("Windows 10", "Windows 11");
+        Line($"Windows: {product} {Reg(nt, "DisplayVersion")} (build {Reg(nt, "CurrentBuild")})");
         Line($"CPU: {Reg(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString").Trim()} · {Environment.ProcessorCount} threads");
         Line($"RAM: {GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (double)(1L << 30):0.0} GB");
         foreach (var g in GpuInfo.Adapters()) Line($"GPU: {g.Name} · driver {g.FriendlyVersion} ({g.DriverVersion})");
