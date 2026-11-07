@@ -442,7 +442,8 @@ public sealed class CaptureEngine : IDisposable
         if (vf != null) a.AddRange(new[] { "-vf", vf });
         a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
 
-        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", tracks > 1 ? "160k" : "192k", "-ar", "48000", "-shortest" });
+        // (no -shortest: for live capture it only adds a queue that can hold raw video frames while waiting on audio)
+        if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", tracks > 1 ? "160k" : "192k", "-ar", "48000" });
 
         a.AddRange(new[]
         {
@@ -539,10 +540,41 @@ public sealed class CaptureEngine : IDisposable
         });
     }
 
+    // ---- memory guard ----
+    const long MemoryLimit = 2L << 30;  // normal is roughly 100–400 MB; anything near this means frames are piling up
+    long _lastMemCheck;
+    /// <summary>The capture engine's private memory at the last check (for diagnostics).</summary>
+    public long EngineMemory { get; private set; }
+    /// <summary>Raised (once per session) when the capture engine was restarted for using too much memory.</summary>
+    public event Action<long>? MemoryRestarted;
+    bool _memNotified;
+
+    void CheckMemory()
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastMemCheck < 3000) return;
+        _lastMemCheck = now;
+        var p = _proc;
+        if (p == null) return;
+        try
+        {
+            p.Refresh();
+            if (p.HasExited) return;
+            EngineMemory = p.PrivateMemorySize64;
+        }
+        catch { return; }
+        if (EngineMemory < MemoryLimit) return;
+        AddLog($"Capture engine using {EngineMemory >> 20} MB of memory: restarting it.");
+        long mem = EngineMemory;
+        ScheduleRecovery("The capture engine was using too much memory.", 0);
+        if (!_memNotified) { _memNotified = true; MemoryRestarted?.Invoke(mem); }
+    }
+
     /// <summary>Called every second: notices when capture is producing again, or has silently stalled.</summary>
     void Watchdog(List<Segment> segs)
     {
         if (!IsRunning) return;
+        CheckMemory();
         int newest = segs.Count > 0 ? segs[^1].Index : -1;
         long now = Environment.TickCount64;
         if (newest != _lastNewest)

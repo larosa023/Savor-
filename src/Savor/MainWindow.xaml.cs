@@ -69,6 +69,9 @@ public partial class MainWindow : Window
         _engine = new CaptureEngine(() => _settings);
         _engine.StateChanged += () => Dispatcher.BeginInvoke(RefreshState);
         _engine.Failed += msg => Dispatcher.BeginInvoke(() => ShowError(msg));
+        _engine.MemoryRestarted += mb => Dispatcher.BeginInvoke(() =>
+            Notify("Capture restarted", $"Savor's capture engine was using {mb >> 20:N0} MB of memory, so it was restarted (your replay buffer is kept). " +
+                   "If this keeps happening, use Settings → About → Copy diagnostics and send it over.", error: true));
         _engine.Recovered += () => Dispatcher.BeginInvoke(() =>
         {
             HideError();
@@ -2634,14 +2637,14 @@ public partial class MainWindow : Window
             if (root != null) Line($"Captures drive: {Storage.Gb(Storage.FreeBytes(root))} free · storage limit {(_settings.StorageLimitGb > 0 ? _settings.StorageLimitGb + " GB" : "none")}");
         }
         catch { }
-        Line($"Savor memory: {Process.GetCurrentProcess().PrivateMemorySize64 / (double)(1L << 20):0} MB");
+        Line($"Savor memory: {Process.GetCurrentProcess().PrivateMemorySize64 / (double)(1L << 20):0} MB · capture engine: {_engine.EngineMemory / (double)(1L << 20):0} MB");
 
         var log = _engine.RecentLog().Trim();
         if (log.Length > 0)
         {
             Line("");
             Line("Recent capture log:");
-            foreach (var l in log.Split('\n').TakeLast(20)) Line("  " + l.TrimEnd());
+            foreach (var l in log.Split('\n').TakeLast(40)) Line("  " + l.TrimEnd());
         }
         try
         {

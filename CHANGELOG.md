@@ -1,5 +1,10 @@
 # What's new in Savor
 
+## 0.9.4 · Nov 7, 2026
+- Memory safety net: if Savor's capture engine (ffmpeg) ever uses more than 2 GB of memory, Savor restarts it automatically — your replay buffer and recording are kept — and lets you know once. The live preview has the same guard.
+- Removed a capture setting that could make the capture engine hold video in memory while waiting for audio.
+- Copy diagnostics now includes the capture engine's memory use and more of its recent log.
+
 ## 0.9.3 · Nov 5, 2026
 - Fixed audio being out of sync with the video. Audio that piled up while capture was starting made the whole soundtrack late (about a third of a second), and long sessions could slowly drift. Audio is now timed against the same clock as the screen and kept locked to it. Clips saved before this update keep their offset.
 

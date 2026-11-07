@@ -121,7 +121,16 @@ public sealed class PreviewSource : IDisposable
                     (_ready, _spare) = (_spare, _ready);
                     _fresh = true;
                 }
-                Interlocked.Increment(ref _frames);
+                // memory guard: the preview should stay small; if its ffmpeg ever balloons, end it (it restarts on its own)
+                if (Interlocked.Increment(ref _frames) % 240 == 0)
+                {
+                    try
+                    {
+                        var p = _proc;
+                        if (p != null) { p.Refresh(); if (p.PrivateMemorySize64 > (1L << 30)) { p.Kill(true); return; } }
+                    }
+                    catch { }
+                }
             }
         }
         catch { }
