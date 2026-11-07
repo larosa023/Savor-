@@ -171,8 +171,6 @@ public partial class MainWindow : Window
 
         await DetectEncodersAsync(force: false);
         SelfLog("encoder: " + EncoderDescription().Replace("\n", " | "));
-        if (_settings.DirectCaptureOff.Count > 0)
-            Line($"Compatibility capture (direct GPU capture used too much memory): {string.Join(", ", _settings.DirectCaptureOff)}");
         foreach (var f in _encoderFailures) SelfLog($"probe failure [{f.Key}]: {f.Value.Replace('\n', ' ')}");
         _ = EnforceStorageAsync();
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
