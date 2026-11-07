@@ -367,6 +367,14 @@ public static class Ffmpeg
     }
 
     /// <summary>Picks the encoder to use: the user's choice if it works, else the best H.264 option.</summary>
+    /// <summary>Same as Pick, but uses compatibility capture for encoders listed in <paramref name="directOff"/>.</summary>
+    public static EncoderChoice? Pick(List<EncoderChoice> available, string preferredId, ICollection<string> directOff)
+    {
+        var c = Pick(available, preferredId);
+        return c is { Pipeline: CapturePipeline.DdaDirect } && directOff.Contains(c.Def.Id)
+            ? new EncoderChoice(c.Def, CapturePipeline.DdaDownload) : c;
+    }
+
     public static EncoderChoice? Pick(List<EncoderChoice> available, string preferredId)
     {
         if (preferredId != "auto")

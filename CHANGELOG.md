@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.5 · Nov 7, 2026
+- Fixed the capture engine growing to several GB of memory on some NVIDIA cards (seen on a GTX 1080 Ti). If direct GPU capture starts piling up memory, Savor switches that encoder to compatibility capture (frames go through system memory first, using a little CPU) and remembers it, so it stays low from then on.
+
 ## 0.9.4 · Nov 7, 2026
 - Memory safety net: if Savor's capture engine (ffmpeg) ever uses more than 2 GB of memory, Savor restarts it automatically — your replay buffer and recording are kept — and lets you know once. The live preview has the same guard.
 - Removed a capture setting that could make the capture engine hold video in memory while waiting for audio.

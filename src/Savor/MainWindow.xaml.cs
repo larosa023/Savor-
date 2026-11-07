@@ -69,9 +69,13 @@ public partial class MainWindow : Window
         _engine = new CaptureEngine(() => _settings);
         _engine.StateChanged += () => Dispatcher.BeginInvoke(RefreshState);
         _engine.Failed += msg => Dispatcher.BeginInvoke(() => ShowError(msg));
+        _engine.DirectCaptureDisabled += id => Dispatcher.BeginInvoke(() =>
+        {
+            if (!_settings.DirectCaptureOff.Contains(id)) { _settings.DirectCaptureOff.Add(id); _settings.Save(); }
+        });
         _engine.MemoryRestarted += mb => Dispatcher.BeginInvoke(() =>
-            Notify("Capture restarted", $"Savor's capture engine was using {mb >> 20:N0} MB of memory, so it was restarted (your replay buffer is kept). " +
-                   "If this keeps happening, use Settings → About → Copy diagnostics and send it over.", error: true));
+            Notify("Capture restarted", $"Savor's capture engine was using {mb >> 20:N0} MB of memory, so it was restarted in compatibility mode " +
+                   "(your replay buffer is kept). If this keeps happening, use Settings → About → Copy diagnostics and send it over.", error: true));
         _engine.Recovered += () => Dispatcher.BeginInvoke(() =>
         {
             HideError();
@@ -167,6 +171,8 @@ public partial class MainWindow : Window
 
         await DetectEncodersAsync(force: false);
         SelfLog("encoder: " + EncoderDescription().Replace("\n", " | "));
+        if (_settings.DirectCaptureOff.Count > 0)
+            Line($"Compatibility capture (direct GPU capture used too much memory): {string.Join(", ", _settings.DirectCaptureOff)}");
         foreach (var f in _encoderFailures) SelfLog($"probe failure [{f.Key}]: {f.Value.Replace('\n', ' ')}");
         _ = EnforceStorageAsync();
         if (_editOnStart != null) _ = Dispatcher.BeginInvoke(() => OpenEditor(_editOnStart), DispatcherPriority.Loaded);
@@ -209,7 +215,7 @@ public partial class MainWindow : Window
             RecordButton.IsEnabled = true;
         }
 
-        _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId);
+        _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId, _settings.DirectCaptureOff);
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         if (_engine.Encoder == null)
         {
@@ -1748,6 +1754,9 @@ public partial class MainWindow : Window
         var src = _editor?.CurrentPath;
         if (src == null || !File.Exists(src)) return "library: no test clip";
         var sb = new System.Text.StringBuilder();
+        var nv = new List<EncoderChoice> { new(Ffmpeg.Encoders[0], CapturePipeline.DdaDirect) };
+        sb.Append($"compat pick: normal={Ffmpeg.Pick(nv, "nvenc_h264", new List<string>())?.Pipeline}, " +
+                  $"after memory switch={Ffmpeg.Pick(nv, "nvenc_h264", new List<string> { "nvenc_h264" })?.Pipeline}; ");
         var dir = Path.Combine(AppSettings.LocalDataDir, "export-test");
         Directory.CreateDirectory(dir);
         async Task<string> Dur(string f)
@@ -2471,7 +2480,7 @@ public partial class MainWindow : Window
         _settings.Save();
 
         _engine.Display = _displays.FirstOrDefault(d => d.OutputIndex == _settings.DisplayIndex) ?? _displays.FirstOrDefault();
-        _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId);
+        _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId, _settings.DirectCaptureOff);
         _captureDirty = true; // before any await, so leaving Settings right away still applies the change
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         ApplyNote.Visibility = _engine.Recording ? Visibility.Visible : Visibility.Collapsed;
@@ -2620,6 +2629,8 @@ public partial class MainWindow : Window
         Line("");
         Line($"Encoders found: {(_encoders.Count == 0 ? "none" : string.Join(", ", _encoders.Select(x => $"{x.Name} [{x.Pipeline}]")))}");
         Line($"Encoder in use: {_engine.Encoder?.Name ?? "none"} [{_engine.Encoder?.Pipeline}] (setting: {_settings.EncoderId})");
+        if (_settings.DirectCaptureOff.Count > 0)
+            Line($"Compatibility capture (direct GPU capture used too much memory): {string.Join(", ", _settings.DirectCaptureOff)}");
         foreach (var f in _encoderFailures)
             Line($"GPU failure [{f.Key}]: {Shorten(f.Value.Replace("\r", "").Replace('\n', ' '), 400)}");
         var size = Ffmpeg.OutputSize(_engine.Display, _settings.OutputHeight);

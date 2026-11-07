@@ -547,6 +547,8 @@ public sealed class CaptureEngine : IDisposable
     public long EngineMemory { get; private set; }
     /// <summary>Raised (once per session) when the capture engine was restarted for using too much memory.</summary>
     public event Action<long>? MemoryRestarted;
+    /// <summary>Raised when an encoder is moved off direct GPU capture because of memory use (id of the encoder).</summary>
+    public event Action<string>? DirectCaptureDisabled;
     bool _memNotified;
 
     void CheckMemory()
@@ -566,6 +568,13 @@ public sealed class CaptureEngine : IDisposable
         if (EngineMemory < MemoryLimit) return;
         AddLog($"Capture engine using {EngineMemory >> 20} MB of memory: restarting it.");
         long mem = EngineMemory;
+        if (Encoder is { Pipeline: CapturePipeline.DdaDirect } enc && enc.Def.Vendor != "cpu")
+        {
+            // direct GPU frames are what piles up on some cards/drivers: use the compatibility path from now on
+            Encoder = new EncoderChoice(enc.Def, CapturePipeline.DdaDownload);
+            AddLog($"Switching {enc.Def.Name} to compatibility capture (frames through system memory).");
+            DirectCaptureDisabled?.Invoke(enc.Def.Id);
+        }
         ScheduleRecovery("The capture engine was using too much memory.", 0);
         if (!_memNotified) { _memNotified = true; MemoryRestarted?.Invoke(mem); }
     }

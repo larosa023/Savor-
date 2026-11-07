@@ -117,6 +117,11 @@ public sealed class AppSettings
     public bool MicNoiseSuppression { get; set; } = false;
     /// <summary>Results of "can the GPU resize for this encoder" checks, by encoder + size + driver.</summary>
     public Dictionary<string, bool> GpuScaleTests { get; set; } = new();
+    /// <summary>
+    /// Encoders whose direct GPU capture made the capture engine balloon in memory on this PC (seen with some
+    /// GTX 10-series cards / drivers). They use compatibility capture: frames go through system memory first.
+    /// </summary>
+    public List<string> DirectCaptureOff { get; set; } = new();
     /// <summary>Game/app categories the user renamed: detected name → their name (used for new captures too).</summary>
     public Dictionary<string, string> GameAliases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
