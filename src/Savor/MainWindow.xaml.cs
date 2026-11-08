@@ -69,6 +69,15 @@ public partial class MainWindow : Window
         _engine = new CaptureEngine(() => _settings);
         _engine.StateChanged += () => Dispatcher.BeginInvoke(RefreshState);
         _engine.Failed += msg => Dispatcher.BeginInvoke(() => ShowError(msg));
+        _engine.GraphicsCaptureFailed += () => Dispatcher.BeginInvoke(() =>
+        {
+            _settings.GraphicsCapture = false;
+            _settings.Save();
+            bool was = _loadingUi; _loadingUi = true;
+            SelectByTag(CaptureMethodCombo, "dda");
+            _loadingUi = was;
+            Notify("Capture method changed", "Windows Graphics Capture didn't work on this PC, so Savor went back to Desktop Duplication.", error: true);
+        });
         _engine.DirectCaptureDisabled += id => Dispatcher.BeginInvoke(() =>
         {
             if (!_settings.DirectCaptureOff.Contains(id)) { _settings.DirectCaptureOff.Add(id); _settings.Save(); }
@@ -215,6 +224,9 @@ public partial class MainWindow : Window
 
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId, _settings.DirectCaptureOff);
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
+        bool gfx = await Ffmpeg.HasGraphicsCaptureAsync();
+        CaptureMethodRow.Visibility = gfx ? Visibility.Visible : Visibility.Collapsed;
+        _engine.UseGraphicsCapture = gfx && _settings.GraphicsCapture;
         if (_engine.Encoder == null)
         {
             ShowError("No working video encoder was found. Make sure your graphics drivers are up to date, then use Settings → Encoder → re-detect.");
@@ -1825,12 +1837,15 @@ public partial class MainWindow : Window
         var dir = Path.Combine(AppSettings.LocalDataDir, "pipe-test");
         Directory.CreateDirectory(dir);
         var outFile = Path.Combine(dir, "seg_%03d.ts");
-        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-nostdin",
-            "-f", "lavfi", "-i", "color=black:s=320x180:r=30,realtime" };
+        // same clock setup as capture: wall-clock video and audio, -copyts, timeline shifted back to ~0
+        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-nostdin", "-copyts",
+            "-use_wallclock_as_timestamps", "1", "-f", "lavfi", "-i", "color=black:s=320x180:r=30,realtime" };
         args.AddRange(CaptureEngine.AudioInputArgs(48000, 6));
         args.AddRange(new[] { "-filter_complex", $"[1:a]{CaptureEngine.AudioSync},asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]",
             "-map", "0:v", "-map", "[a0]", "-map", "[a1]", "-map", "[a2]", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-ar", "48000", "-shortest", "-t", "4", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", outFile });
+            "-c:a", "aac", "-ar", "48000", "-t", "4",
+            "-output_ts_offset", (-(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
+            "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", outFile });
         var psi = Ffmpeg.StartInfo(args, redirectInput: true);
         using var p = Process.Start(psi)!;
         var errTask = p.StandardError.ReadToEndAsync();
@@ -1850,14 +1865,16 @@ public partial class MainWindow : Window
         }
         catch { }
         try { p.StandardInput.Close(); } catch { }
-        await p.WaitForExitAsync();
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+            try { await p.WaitForExitAsync(cts.Token); } catch (OperationCanceledException) { try { p.Kill(true); } catch { } }
         var err = (await errTask).Trim();
         var segs = Directory.GetFiles(dir, "*.ts");
         string info = "";
         if (segs.Length > 0)
         {
             var (_, e) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", segs[0] }, TimeSpan.FromSeconds(10));
-            info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, "Audio:").Count}";
+            var st = System.Text.RegularExpressions.Regex.Match(e, @"start: ([\d.]+)");
+            info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, "Audio:").Count}, timeline starts at {(st.Success ? st.Groups[1].Value : "?")} s";
         }
         try { Directory.Delete(dir, true); } catch { }
         return $"audio pipe: exit={p.ExitCode}, pieces={segs.Length}, {info}{(err.Length > 0 ? " | ffmpeg: " + err.Replace('\n', ' ')[..Math.Min(300, err.Length)] : "")}";
@@ -1989,6 +2006,22 @@ public partial class MainWindow : Window
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestLibraryAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "library: FAILED " + ex + "\n"); }
+
+        try
+        {
+            bool gfx = await Ffmpeg.HasGraphicsCaptureAsync();
+            string r = "not in this ffmpeg";
+            if (gfx)
+            {
+                var (code, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "gfxcapture=monitor_idx=0:max_framerate=30", "-t", "2", "-f", "null", "-" }, TimeSpan.FromSeconds(20));
+                r = $"exit={code} {err.Trim().Split('\n').LastOrDefault()}";
+            }
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"graphics capture: available={gfx}, run: {r}\n");
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "graphics capture: FAILED " + ex.Message + "\n"); }
+        try { if (_editor != null) File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await _editor.SelfTestAudioSyncAsync() + "\n"); }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio sync UI: FAILED " + ex.Message + "\n"); }
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestAudioPipeAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio pipe: FAILED " + ex.Message + "\n"); }
@@ -2309,6 +2342,7 @@ public partial class MainWindow : Window
                 FpsCombo.Items.Add(new ComboBoxItem { Content = $"{f} fps", Tag = f });
             if (!SelectByTag(FpsCombo, _settings.Fps)) SelectByTag(FpsCombo, 60);
             FillResolutions();
+            SelectByTag(CaptureMethodCombo, _settings.GraphicsCapture ? "wgc" : "dda");
 
             QualityCombo.Items.Clear();
             foreach (var (q, label) in new[] {
@@ -2463,6 +2497,11 @@ public partial class MainWindow : Window
         if (_loadingUi) return;
         if (ReferenceEquals(sender, DisplayCombo)) FillResolutions();
         _settings.OutputHeight = SelectedTag<int>(ResolutionCombo);
+        if (CaptureMethodRow.Visibility == Visibility.Visible)
+        {
+            _settings.GraphicsCapture = (CaptureMethodCombo.SelectedItem as ComboBoxItem)?.Tag as string == "wgc";
+            _engine.UseGraphicsCapture = _settings.GraphicsCapture;
+        }
         _settings.DisplayIndex = SelectedTag<int>(DisplayCombo);
         int fps = SelectedTag<int>(FpsCombo);
         _settings.Fps = fps > 0 ? fps : 60;
@@ -2637,7 +2676,8 @@ public partial class MainWindow : Window
         var size = Ffmpeg.OutputSize(_engine.Display, _settings.OutputHeight);
         Line($"Capture: {_engine.Display?.Label.Replace("  ", " ") ?? "?"} · {_settings.Fps} fps · {_settings.Quality} · " +
              (size is { } sz ? $"output {sz.W}×{sz.H} ({(_engine.GpuScale ? "GPU" : "CPU")} resize)" : "native size") +
-             $" · cursor {(_settings.CaptureCursor ? "on" : "off")} · {_settings.Container}");
+             $" · cursor {(_settings.CaptureCursor ? "on" : "off")} · {_settings.Container} · " +
+             (_engine.UseGraphicsCapture ? "Windows Graphics Capture" : "Desktop Duplication"));
         Line($"Audio: desktop {(_settings.DesktopAudio ? "on" : "off")} · mic {(string.IsNullOrEmpty(_settings.MicDeviceId) ? "off" : "on")} · " +
              $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
              (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));

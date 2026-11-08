@@ -26,7 +26,8 @@ public sealed class CaptureEngine : IDisposable
 
     Process? _proc;
     AudioMixer? _mixer;
-    BlockingCollection<byte[]>? _audioQueue;
+    BlockingCollection<(byte[] data, long heard)>? _audioQueue; // chunk + when its first sample was heard (Stopwatch ticks)
+    int _audioRate = 48000, _audioFrameBytes = 8;
     Thread? _writer;
     volatile bool _audioConnected;
     bool _audioOn;
@@ -303,7 +304,9 @@ public sealed class CaptureEngine : IDisposable
                 };
                 rate = _mixer.SampleRate;
                 _mixer.DeviceLost += () => ScheduleRecovery("audio device changed", 800);
-                _audioQueue = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>(), 1024);
+                _audioQueue = new BlockingCollection<(byte[], long)>(new ConcurrentQueue<(byte[], long)>(), 1024);
+                _audioRate = rate;
+                _audioFrameBytes = _mixer.OutputChannels * 4;
                 _audioConnected = false;
                 _mixer.DataAvailable += OnAudio;
                 _mixer.Start();
@@ -343,7 +346,7 @@ public sealed class CaptureEngine : IDisposable
             // Audio goes to ffmpeg over stdin (raw 32-bit float PCM).
             var stdin = p.StandardInput.BaseStream;
             var q = _audioQueue;
-            _writer = new Thread(() => WriterLoop(stdin, q)) { IsBackground = true, Name = "Savor audio feed" };
+            _writer = new Thread(() => WriterLoop(stdin, q)) { IsBackground = true, Name = "Savor audio feed", Priority = ThreadPriority.Highest };
             _audioConnected = true;
             _writer.Start();
         }
@@ -368,13 +371,32 @@ public sealed class CaptureEngine : IDisposable
         return fc.ToString();
     }
 
-    /// <summary>Keeps the piped audio locked to its arrival timestamps (see BuildArgs).</summary>
-    public const string AudioSync = "aresample=async=1000:first_pts=0";
+    // ---- capture method ----
+    /// <summary>Capture the screen with Windows Graphics Capture instead of Desktop Duplication.</summary>
+    public bool UseGraphicsCapture { get; set; }
+    /// <summary>Raised when Windows Graphics Capture keeps failing on this PC and Savor went back to Desktop Duplication.</summary>
+    public event Action? GraphicsCaptureFailed;
 
-    /// <summary>The piped raw-audio input, stamped with arrival time (see BuildArgs).</summary>
+    static ulong? MonitorHandle(DisplayInfo d)
+    {
+        try { return (ulong)MonitorFromPoint(new POINT { X = d.X + d.Width / 2, Y = d.Y + d.Height / 2 }, 2 /* NEAREST */); }
+        catch { return null; }
+    }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct POINT { public int X, Y; }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+
+    /// <summary>Keeps the piped audio locked to its timestamps (fills or trims tiny gaps smoothly).</summary>
+    public const string AudioSync = "aresample=async=1000";
+
+    /// <summary>
+    /// The piped raw-audio input: stamped when ffmpeg reads it, minus the fixed release delay (see WriterLoop) and
+    /// the 1024-sample packet ffmpeg waits for, so each sample's time is when it was heard.
+    /// </summary>
     public static string[] AudioInputArgs(int rate, int channels) => new[]
     {
-        "-itsoffset", "-0.03", "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
+        "-itsoffset", (-(AudioDelay + 1024.0 / rate)).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
+        "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
         "-f", "f32le", "-ar", rate.ToString(), "-ac", channels.ToString(), "-i", "pipe:0"
     };
 
@@ -384,9 +406,14 @@ public sealed class CaptureEngine : IDisposable
         int fps = s.Fps;
         var a = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y" };
         if (audio) a.Add("-nostdin"); // stdin carries audio, not keyboard commands
+        // With audio, screen frames and audio are both stamped on the system clock and kept as-is (-copyts), so they
+        // line up exactly; -output_ts_offset below brings the timeline back to start near zero.
+        if (audio) a.Add("-copyts");
+        var clock = audio ? new[] { "-use_wallclock_as_timestamps", "1" } : Array.Empty<string>();
 
         if (enc.Pipeline == CapturePipeline.Gdi)
         {
+            a.AddRange(clock);
             a.AddRange(new[] { "-f", "gdigrab", "-framerate", fps.ToString(), "-draw_mouse", s.CaptureCursor ? "1" : "0" });
             if (d != null)
                 a.AddRange(new[] { "-offset_x", d.X.ToString(), "-offset_y", d.Y.ToString(), "-video_size", $"{d.Width}x{d.Height}" });
@@ -395,8 +422,17 @@ public sealed class CaptureEngine : IDisposable
         else
         {
             int idx = d?.OutputIndex ?? 0;
-            a.AddRange(new[] { "-f", "lavfi", "-i",
-                $"ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={(s.CaptureCursor ? 1 : 0)}" });
+            a.AddRange(clock);
+            if (UseGraphicsCapture && d != null && MonitorHandle(d) is { } hmon && hmon != 0)
+            {
+                // Windows Graphics Capture: sees video players / browsers that draw on hardware overlay planes, which
+                // Desktop Duplication can miss (choppy captures of streams). Same D3D11 frames, same encoder paths.
+                a.AddRange(new[] { "-f", "lavfi", "-i",
+                    $"gfxcapture=hmonitor={hmon}:max_framerate={fps}:capture_cursor={(s.CaptureCursor ? 1 : 0)}" });
+            }
+            else
+                a.AddRange(new[] { "-f", "lavfi", "-i",
+                    $"ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={(s.CaptureCursor ? 1 : 0)}" });
         }
 
         if (audio)
@@ -445,6 +481,12 @@ public sealed class CaptureEngine : IDisposable
         // (no -shortest: for live capture it only adds a queue that can hold raw video frames while waiting on audio)
         if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", tracks > 1 ? "160k" : "192k", "-ar", "48000" });
 
+        if (audio)
+        {
+            // system-clock timestamps are seconds since 1970: shift so this run starts near zero
+            var epoch = (DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds;
+            a.AddRange(new[] { "-output_ts_offset", (-epoch).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) });
+        }
         a.AddRange(new[]
         {
             "-f", "segment",
@@ -530,6 +572,13 @@ public sealed class CaptureEngine : IDisposable
                     message = ex.Message;
                     Interlocked.Increment(ref _failures);
                     int f = Volatile.Read(ref _failures);
+                    if (f >= 2 && UseGraphicsCapture)
+                    {
+                        // Graphics Capture isn't working here: go back to Desktop Duplication
+                        UseGraphicsCapture = false;
+                        AddLog("Windows Graphics Capture failed twice: switching back to Desktop Duplication.");
+                        GraphicsCaptureFailed?.Invoke();
+                    }
                     ScheduleRecovery(message, (int)Math.Min(30_000, 1000 * Math.Pow(2, f - 1)));
                 }
                 if (Volatile.Read(ref _failures) >= 3 && !_failNotified) { _failNotified = true; notify = true; }
@@ -622,26 +671,57 @@ public sealed class CaptureEngine : IDisposable
 
     // ================= audio pipe =================
 
+    // ---- A/V sync ----
+    // Audio reaches Savor in bursts, 50–150+ ms after it was heard (Windows hands loopback audio over in batches).
+    // ffmpeg stamps each piece with the time it reads it, on the same clock as the screen frames. So Savor releases
+    // every 10 ms piece exactly AudioDelay after it was heard, and ffmpeg subtracts that known delay (-itsoffset):
+    // the audio lands where it was heard, whatever the batching. (Measured in a simulation of bursty capture: within
+    // ~15 ms, versus 110–180 ms late when audio was written as it arrived.)
+    const double AudioDelay = 0.25;     // seconds: comfortably more than the capture latency
+    const double DeviceLatency = 0.010; // the newest sample in a batch was heard about this long before it arrived
+    const int PieceFrames = 480;        // 10 ms at 48 kHz
+
     void OnAudio(byte[] data, int count)
     {
         var q = _audioQueue;
         if (!_audioConnected || q == null || q.IsAddingCompleted) return;
         var copy = new byte[count];
         Buffer.BlockCopy(data, 0, copy, 0, count);
-        try { q.TryAdd(copy); } catch (InvalidOperationException) { }
+        double secs = count / (double)_audioFrameBytes / _audioRate + DeviceLatency;
+        long heard = Stopwatch.GetTimestamp() - (long)(secs * Stopwatch.Frequency);
+        try { q.TryAdd((copy, heard)); } catch (InvalidOperationException) { }
     }
 
-    void WriterLoop(Stream output, BlockingCollection<byte[]> q)
+    void WriterLoop(Stream output, BlockingCollection<(byte[] data, long heard)> q)
     {
+        timeBeginPeriod(1); // 1 ms sleeps while capturing, so pieces go out on time
         try
         {
-            foreach (var buf in q.GetConsumingEnumerable())
-                output.Write(buf, 0, buf.Length);
-            output.Flush();
+            int pieceBytes = PieceFrames * _audioFrameBytes;
+            long delay = (long)(AudioDelay * Stopwatch.Frequency);
+            foreach (var (buf, heard) in q.GetConsumingEnumerable())
+            {
+                for (int off = 0, k = 0; off < buf.Length; off += pieceBytes, k++)
+                {
+                    long due = heard + (long)((double)k * PieceFrames / _audioRate * Stopwatch.Frequency) + delay;
+                    while (true)
+                    {
+                        long wait = due - Stopwatch.GetTimestamp();
+                        if (wait <= 0) break;
+                        int ms = (int)(wait * 1000 / Stopwatch.Frequency);
+                        if (ms >= 2) Thread.Sleep(ms - 1); else Thread.SpinWait(200);
+                    }
+                    output.Write(buf, off, Math.Min(pieceBytes, buf.Length - off));
+                }
+                output.Flush();
+            }
         }
         catch { /* ffmpeg exited */ }
-        finally { _audioConnected = false; }
+        finally { _audioConnected = false; timeEndPeriod(1); }
     }
+
+    [System.Runtime.InteropServices.DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
+    [System.Runtime.InteropServices.DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
 
     void TeardownAudio()
     {

@@ -73,6 +73,10 @@ public partial class ClipEditor : UserControl
     {
         _path = path;
         _resume = null;
+        _audioOffset = 0;
+        if (AudioSyncText != null) ShowAudioOffset();
+        _tracks = new();
+        Player.IsMuted = VolumeSlider.Value <= 0.001; // a previous clip may have muted it for Savor's own audio
         _settings = settings;
         _encoder = encoder;
         _opened = false;
@@ -362,7 +366,7 @@ public partial class ClipEditor : UserControl
         audio.SetVolume((float)VolumeSlider.Value, VolumeSlider.Value <= 0.001);
         try
         {
-            await audio.PrepareAsync(_path, _listen.ToArray(), cts.Token);
+            await audio.PrepareAsync(_path, _listen.ToArray(), cts.Token, _audioOffset);
             if (cts.IsCancellationRequested) { audio.Dispose(); return; }
             _audio = audio;
             ListenStatus.Text = _listen.Count == 1 ? "" : $"{_listen.Count} tracks mixed together.";
@@ -506,7 +510,7 @@ public partial class ClipEditor : UserControl
     {
         if (!_ready) return;
         Player.Volume = VolumeSlider.Value;
-        Player.IsMuted = _tracks.Count > 1 || VolumeSlider.Value <= 0.001;
+        Player.IsMuted = _tracks.Count > 1 || _audio != null || VolumeSlider.Value <= 0.001;
         _audio?.SetVolume((float)VolumeSlider.Value, VolumeSlider.Value <= 0.001);
         VolIcon.Text = Player.IsMuted ? "" : "";
     }
@@ -860,6 +864,28 @@ public partial class ClipEditor : UserControl
         $"audio tracks={_tracks.Count} [{string.Join(", ", _tracks.Select(t => t.Name))}], listening={string.Join("+", _listen)}, " +
         $"player ready={_audio?.Ready == true}, status=\"{ListenStatus.Text}\", windows player muted={Player.IsMuted}";
 
+    /// <summary>CI only: nudging the audio re-renders it shifted, and exports carry the shift.</summary>
+    public async Task<string> SelfTestAudioSyncAsync()
+    {
+        NudgeAudio(-0.05); NudgeAudio(-0.05); NudgeAudio(-0.01);
+        await Task.Delay(4000);
+        var label = AudioSyncText.Text;
+        bool own = _audio is { Ready: true };
+        var outFile = Path.Combine(AppSettings.LocalDataDir, "sync-test.mp4");
+        string exp;
+        try
+        {
+            await ClipExporter.ExportAsync(new ExportRequest { Input = _path!, Output = outFile, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(3),
+                AudioOffset = _audioOffset, Audio = AudioExport.MixOnly }, _encoder?.Invoke(), _settings!.Quality, null, CancellationToken.None);
+            exp = File.Exists(outFile) ? $"export ok ({new FileInfo(outFile).Length / 1024} KB)" : "export missing";
+            File.Delete(outFile);
+        }
+        catch (Exception ex) { exp = "export failed: " + ex.Message; }
+        AudioSyncReset_Click(this, null!);
+        await Task.Delay(800);
+        return $"audio sync UI: label=\"{label}\", offset audio playing={own}, {exp}, after reset=\"{AudioSyncText.Text}\"";
+    }
+
     /// <summary>CI only: markers draw on the timeline and [ / ] jump between them.</summary>
     public async Task<string> SelfTestMarkersAsync()
     {
@@ -948,7 +974,7 @@ public partial class ClipEditor : UserControl
             }
         }
         CropLayer.Visibility = mode == "none" ? Visibility.Collapsed : Visibility.Visible;
-        FastToggle.IsEnabled = mode == "none" && !IsGif && Math.Abs(ExportSpeed - 1) < 0.001;
+        FastToggle.IsEnabled = mode == "none" && !IsGif && Math.Abs(ExportSpeed - 1) < 0.001 && Math.Abs(_audioOffset) < 0.0005;
         if (mode != "none") FastToggle.IsChecked = false;
         if (mode != "none") { Pause(); BigPlay.Visibility = Visibility.Collapsed; }
         LayoutCrop();
@@ -1117,6 +1143,57 @@ public partial class ClipEditor : UserControl
 
     void Fast_Click(object sender, RoutedEventArgs e) { }
 
+    // ===================== audio sync fix =====================
+
+    double _audioOffset; // seconds, positive = sound later
+    DispatcherTimer? _offsetTimer;
+
+    void AudioEarlier_Click(object sender, RoutedEventArgs e) => NudgeAudio(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -0.05 : -0.01);
+    void AudioLater_Click(object sender, RoutedEventArgs e) => NudgeAudio(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 0.05 : 0.01);
+    void AudioSyncReset_Click(object sender, MouseButtonEventArgs e) { if (_audioOffset != 0) NudgeAudio(-_audioOffset); }
+
+    void NudgeAudio(double delta)
+    {
+        _audioOffset = Math.Round(Math.Clamp(_audioOffset + delta, -2, 2), 3);
+        ShowAudioOffset();
+        ExportOptions_Changed(this, new RoutedEventArgs());
+        // re-render the audio once the clicking stops
+        _offsetTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(350), DispatcherPriority.Background,
+            (_, _) => { _offsetTimer!.Stop(); _ = ApplyAudioOffsetAsync(); }, Dispatcher);
+        _offsetTimer.Stop();
+        _offsetTimer.Start();
+        Focus();
+    }
+
+    void ShowAudioOffset()
+    {
+        int ms = (int)Math.Round(_audioOffset * 1000);
+        AudioSyncText.Text = ms == 0 ? "In sync" : ms < 0 ? $"Sound {-ms} ms earlier" : $"Sound {ms} ms later";
+        AudioSyncNote.Visibility = ms == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>Plays the shifted audio. Single-track clips switch to Savor's own audio player while shifted.</summary>
+    async Task ApplyAudioOffsetAsync()
+    {
+        if (_path == null) return;
+        bool single = _tracks.Count < 2;
+        if (single)
+        {
+            if (Math.Abs(_audioOffset) < 0.0005)
+            {
+                _audio?.Dispose();
+                _audio = null;
+                Player.IsMuted = VolumeSlider.Value <= 0.001; // Windows' player plays it again
+                return;
+            }
+            if (_tracks.Count == 0) return; // no audio at all
+            Player.IsMuted = true;
+            _listen.Clear();
+            _listen.Add(0);
+        }
+        await PrepareAudioAsync();
+    }
+
     bool IsGif => FormatCombo?.SelectedItem is ComboBoxItem { Tag: "gif" };
 
     double ExportSpeed => SpeedPanel?.Children.OfType<RadioButton>().FirstOrDefault(r => r.IsChecked == true)?.Tag is string t &&
@@ -1126,11 +1203,12 @@ public partial class ClipEditor : UserControl
     void ExportOptions_Changed(object sender, RoutedEventArgs e)
     {
         if (!_ready || FastToggle == null) return;
-        bool reencode = IsGif || Math.Abs(ExportSpeed - 1) > 0.001;
+        bool reencode = IsGif || Math.Abs(ExportSpeed - 1) > 0.001 || Math.Abs(_audioOffset) > 0.0005;
         FastToggle.IsEnabled = !reencode && _cropMode == "none";
         if (reencode) FastToggle.IsChecked = false;
-        SaveModeCombo.IsEnabled = !reencode;   // GIFs and speed changes always go to a new file
-        if (reencode) SaveModeCombo.SelectedIndex = 0;
+        bool newFile = IsGif || Math.Abs(ExportSpeed - 1) > 0.001;
+        SaveModeCombo.IsEnabled = !newFile;   // GIFs and speed changes always go to a new file
+        if (newFile) SaveModeCombo.SelectedIndex = 0;
         SpeedNote.Visibility = Math.Abs(ExportSpeed - 1) > 0.001 ? Visibility.Visible : Visibility.Collapsed;
         UpdateTrimText();
     }
@@ -1179,7 +1257,8 @@ public partial class ClipEditor : UserControl
             Crop = crop,
             Audio = audio == AudioExport.Selected && _listen.Count == 0 ? AudioExport.None : audio,
             Tracks = _listen.ToArray(),
-            Fast = FastToggle.IsChecked == true && crop == null && !gif && Math.Abs(speed - 1) < 0.001,
+            Fast = FastToggle.IsChecked == true && crop == null && !gif && Math.Abs(speed - 1) < 0.001 && Math.Abs(_audioOffset) < 0.0005,
+            AudioOffset = _audioOffset,
             Speed = speed,
             Gif = gif,
         };

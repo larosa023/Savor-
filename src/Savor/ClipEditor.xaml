@@ -319,6 +319,22 @@
                         </WrapPanel>
                         <TextBlock x:Name="SpeedNote" Text="Speed is applied to the exported file (the preview plays at normal speed)."
                                    Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
+                        <!-- audio sync fix for clips whose sound is early or late -->
+                        <TextBlock Text="Audio sync" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,2,0,6"/>
+                        <DockPanel Margin="0,0,0,4">
+                            <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Padding="10,5" Click="AudioEarlier_Click"
+                                    ToolTip="Sound earlier (10 ms, Shift = 50 ms) — use if the sound comes late">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE76B;" FontSize="11"/>
+                            </Button>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="10,5" Click="AudioLater_Click"
+                                    ToolTip="Sound later (10 ms, Shift = 50 ms) — use if the sound comes early">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE76C;" FontSize="11"/>
+                            </Button>
+                            <TextBlock x:Name="AudioSyncText" Text="In sync" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       FontWeight="SemiBold" Cursor="Hand" ToolTip="Click to reset" MouseLeftButtonUp="AudioSyncReset_Click"/>
+                        </DockPanel>
+                        <TextBlock x:Name="AudioSyncNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8"
+                                   Visibility="Collapsed" Text="You hear the change right away; Export saves a copy with the fixed sound."/>
                         <ComboBox x:Name="SaveModeCombo" MinWidth="0" Margin="0,4,0,0">
                             <ComboBoxItem Content="Save as a new file" Tag="new" IsSelected="True"/>
                             <ComboBoxItem Content="Replace the original" Tag="replace"/>

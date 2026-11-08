@@ -59,19 +59,22 @@ public sealed class ClipAudio : IDisposable
     }
 
     /// <summary>Renders the chosen tracks (mixed together) and gets ready to play.</summary>
-    public async Task PrepareAsync(string path, IReadOnlyList<int> tracks, CancellationToken ct)
+    /// <param name="offset">Audio sync fix (seconds, positive = later), applied to what you hear.</param>
+    public async Task PrepareAsync(string path, IReadOnlyList<int> tracks, CancellationToken ct, double offset = 0)
     {
         Close();
         if (tracks.Count == 0 || Ffmpeg.Path == null) return;
         Directory.CreateDirectory(TempDir);
         var file = Path.Combine(TempDir, $"listen-{Guid.NewGuid():N}.wav");
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", path };
-        if (tracks.Count == 1)
+        var shift = ClipExporter.AudioShift(offset);
+        if (tracks.Count == 1 && shift == null)
             args.AddRange(new[] { "-map", $"0:a:{tracks[0]}" });
         else
         {
             var inputs = string.Concat(tracks.Select(t => $"[0:a:{t}]"));
-            args.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={tracks.Count}:normalize=0[am]", "-map", "[am]" });
+            var mix = tracks.Count == 1 ? $"{inputs}anull" : $"{inputs}amix=inputs={tracks.Count}:normalize=0";
+            args.AddRange(new[] { "-filter_complex", $"{mix}{(shift != null ? "," + shift : "")}[am]", "-map", "[am]" });
         }
         args.AddRange(new[] { "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", file });
 

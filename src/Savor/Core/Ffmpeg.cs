@@ -59,6 +59,22 @@ public static class Ffmpeg
         return Path != null;
     }
 
+    static bool? _hasGfx;
+    /// <summary>Whether this ffmpeg build has Windows Graphics Capture (the gfxcapture source).</summary>
+    public static async Task<bool> HasGraphicsCaptureAsync()
+    {
+        if (_hasGfx is { } known) return known;
+        try
+        {
+            using var p = Process.Start(StartInfo(new[] { "-hide_banner", "-filters" }))!;
+            var outText = await p.StandardOutput.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            _hasGfx = outText.Contains(" gfxcapture ");
+        }
+        catch { _hasGfx = false; }
+        return _hasGfx.Value;
+    }
+
     public static bool HasEmbedded =>
         typeof(Ffmpeg).Assembly.GetManifestResourceInfo(EmbeddedName) != null;
 

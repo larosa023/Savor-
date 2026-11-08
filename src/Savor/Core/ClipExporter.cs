@@ -27,6 +27,8 @@ public sealed class ExportRequest
     public bool Fast { get; init; }
     /// <summary>Playback speed of the result (0.25–2). Needs re-encoding when not 1.</summary>
     public double Speed { get; init; } = 1;
+    /// <summary>Audio sync fix: shift the audio by this many seconds (positive = later). Needs re-encoding.</summary>
+    public double AudioOffset { get; init; }
     /// <summary>Make an animated GIF (no audio) instead of a video.</summary>
     public bool Gif { get; init; }
 }
@@ -48,7 +50,7 @@ public static class ClipExporter
             {
                 await RunAsync(BuildGifArgs(r, tmp), duration, progress, ct);
             }
-            else if (r.Fast && Math.Abs(r.Speed - 1) < 0.001)
+            else if (r.Fast && Math.Abs(r.Speed - 1) < 0.001 && Math.Abs(r.AudioOffset) < 0.0005)
             {
                 await RunAsync(BuildArgs(r, null, quality, tmp), duration, progress, ct);
             }
@@ -75,6 +77,19 @@ public static class ClipExporter
     }
 
     static string Sec(TimeSpan t) => t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Shifts audio in time (fixes clips whose sound is out of sync). Positive = audio later, negative = earlier.
+    /// Null when no shift is needed.
+    /// </summary>
+    public static string? AudioShift(double seconds)
+    {
+        if (Math.Abs(seconds) < 0.0005) return null;
+        var v = Math.Abs(seconds).ToString("0.###", CultureInfo.InvariantCulture);
+        return seconds > 0
+            ? $"adelay={Math.Round(seconds * 1000)}:all=1"
+            : $"atrim=start={v},asetpts=PTS-STARTPTS";
+    }
 
     /// <summary>atempo only goes from 0.5× to 2×, so slower speeds chain it.</summary>
     static string Tempo(double speed)
@@ -120,7 +135,8 @@ public static class ClipExporter
                 break;
             case AudioExport.Selected:
                 var inputs = string.Concat(r.Tracks.Select(t => $"[0:a:{t}]"));
-                a.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={r.Tracks.Length}:normalize=0{(speed ? "," + Tempo(r.Speed) : "")}[am]", "-map", "[am]" });
+                var shiftM = enc != null ? AudioShift(r.AudioOffset) : null;
+                a.AddRange(new[] { "-filter_complex", $"{inputs}amix=inputs={r.Tracks.Length}:normalize=0{(shiftM != null ? "," + shiftM : "")}{(speed ? "," + Tempo(r.Speed) : "")}[am]", "-map", "[am]" });
                 break;
         }
 
@@ -139,8 +155,11 @@ public static class ClipExporter
             a.AddRange(Ffmpeg.EncoderArgs(enc, q, 60, live: false));
             if (r.Audio != AudioExport.None) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k" });
             // each kept track gets the same tempo change (the mixed "selected" track already has it)
-            if (speed && r.Audio != AudioExport.None && !(r.Audio == AudioExport.Selected && r.Tracks.Length > 1))
-                a.AddRange(new[] { "-af", Tempo(r.Speed) });
+            var af = new List<string>();
+            if (AudioShift(r.AudioOffset) is { } shift) af.Add(shift);
+            if (speed) af.Add(Tempo(r.Speed));
+            if (af.Count > 0 && r.Audio != AudioExport.None && !(r.Audio == AudioExport.Selected && r.Tracks.Length > 1))
+                a.AddRange(new[] { "-af", string.Join(",", af) });
         }
         if (r.Audio == AudioExport.None) a.Add("-an");
         if (output.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))

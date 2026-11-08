@@ -1,5 +1,10 @@
 # What's new in Savor
 
+## 0.9.6 · Nov 7, 2026
+- Fixed audio being late in captures (around 0.1–0.2 s). Windows hands Savor recorded audio in batches, a bit after it was heard; Savor now times every piece of audio by when it was heard, on the same clock as the screen.
+- Audio sync fix for clips you've already saved: in the editor, nudge the sound earlier or later under Audio sync (Shift for bigger steps), hear it right away, then Export a fixed copy.
+- New capture method option (Settings → Capture): Windows Graphics Capture. Use it if videos from streaming apps or a browser look choppy in your clips — Desktop Duplication (still the default, best for games) can miss frames from video players. If it doesn't work on your PC, Savor switches back by itself.
+
 ## 0.9.5 · Nov 7, 2026
 - Fixed the capture engine growing to several GB of memory on some NVIDIA cards (seen on a GTX 1080 Ti). If direct GPU capture starts piling up memory, Savor switches that encoder to compatibility capture (frames go through system memory first, using a little CPU) and remembers it, so it stays low from then on.
 - Copy diagnostics now says Windows 11 correctly (Windows reports itself as "Windows 10" internally).

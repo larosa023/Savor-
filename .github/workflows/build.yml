@@ -38,7 +38,7 @@ jobs:
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
           $exe = Get-ChildItem ffmpeg-dl -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $filters = (& $exe.FullName -hide_banner -filters) -join "`n"
-          Write-Host "::notice::ddagrab=$($filters -match 'ddagrab') scale_d3d11=$($filters -match 'scale_d3d11')"
+          Write-Host "::notice::ddagrab=$($filters -match 'ddagrab') scale_d3d11=$($filters -match 'scale_d3d11') gfxcapture=$($filters -match 'gfxcapture')"
           New-Item -ItemType Directory -Force ffmpeg | Out-Null
           $in = [IO.File]::OpenRead($exe.FullName)
           $out = [IO.File]::Create("ffmpeg/ffmpeg.exe.gz")

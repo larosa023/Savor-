@@ -727,6 +727,19 @@
                                     </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
+                                <StackPanel x:Name="CaptureMethodRow" Visibility="Collapsed">
+                                    <DockPanel>
+                                        <ComboBox x:Name="CaptureMethodCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed" MinWidth="190">
+                                            <ComboBoxItem Content="Desktop Duplication" Tag="dda"/>
+                                            <ComboBoxItem Content="Windows Graphics Capture" Tag="wgc"/>
+                                        </ComboBox>
+                                        <StackPanel>
+                                            <TextBlock Text="Capture method" Style="{StaticResource RowTitle}"/>
+                                            <TextBlock Text="Desktop Duplication is best for games. If videos from streaming apps or a browser look choppy in your clips, use Windows Graphics Capture." Style="{StaticResource RowDesc}"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                    <Border Style="{StaticResource Divider}"/>
+                                </StackPanel>
                                 <DockPanel>
                                     <ComboBox x:Name="QualityCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed"/>
                                     <StackPanel>
