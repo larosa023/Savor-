@@ -339,7 +339,9 @@ public sealed class CaptureEngine : IDisposable
             throw;
         }
         ChildProcesses.Track(p);
-        try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
+        try { p.PriorityClass = ProcessPriorityClass.High; } catch { try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { } }
+        GpuPriority = RaiseGpuPriority(p);
+        AddLog($"Capture GPU priority: {GpuPriority}");
         _audioOn = audio;
         if (audio && _audioQueue != null)
         {
@@ -373,6 +375,29 @@ public sealed class CaptureEngine : IDisposable
 
     /// <summary>Extra shift measured by "Check audio sync" on this PC (seconds; positive moves audio earlier).</summary>
     public double AudioSyncCorrection { get; set; }
+
+    // ---- GPU priority ----
+    // When a game keeps the GPU at 100%, Windows schedules the capture engine's GPU work (grabbing the screen,
+    // converting frames for the encoder) behind the game's, so frames get late or skipped and clips stutter.
+    // Like OBS, raise the capture engine's GPU scheduling priority: "realtime" needs Savor to run as administrator,
+    // "high" works without it.
+
+    /// <summary>GPU scheduling priority the capture engine got: "realtime", "high" or "normal".</summary>
+    public string GpuPriority { get; private set; } = "normal";
+
+    static string RaiseGpuPriority(Process p)
+    {
+        try
+        {
+            if (D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 5 /* REALTIME */) == 0) return "realtime";
+            if (D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 4 /* HIGH */) == 0) return "high";
+        }
+        catch { }
+        return "normal";
+    }
+
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+    static extern int D3DKMTSetProcessSchedulingPriorityClass(IntPtr process, int priority);
 
     // ---- capture method ----
     /// <summary>Capture the screen with Windows Graphics Capture instead of Desktop Duplication.</summary>

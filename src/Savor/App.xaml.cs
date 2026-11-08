@@ -17,8 +17,9 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         bool updated = e.Args.Any(a => a.Equals("--updated", StringComparison.OrdinalIgnoreCase));
+        bool restart = e.Args.Any(a => a.Equals("--restart", StringComparison.OrdinalIgnoreCase)); // e.g. relaunched as administrator
         _mutex = new Mutex(true, MutexName, out bool isFirst);
-        if (!isFirst && updated)
+        if (!isFirst && (updated || restart))
         {
             // Just updated: the previous Savor is still shutting down. Wait for it.
             try { isFirst = _mutex.WaitOne(TimeSpan.FromSeconds(30)); }

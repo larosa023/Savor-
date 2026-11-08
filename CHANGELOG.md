@@ -1,6 +1,10 @@
 # What's new in Savor
 
 ## 0.9.8 · Nov 8, 2026
+- Smoother clips in games that max out your GPU: Savor now gives its capture engine high GPU priority, so Windows doesn't push screen capture behind the game (like OBS does).
+- New: Restart as administrator (Settings → Capture → Capture priority) unlocks realtime GPU priority, the smoothest option for GPU-heavy games.
+
+## 0.9.8 · Nov 8, 2026
 - Works with Isle, the Dynamic Island for Windows: while Isle is running, a live Recording card with a timer, Stop and Marker sits at the top of your screen, saved clips pop up there with a thumbnail and Edit / Copy / Show in folder, and Savor's notifications show there instead of in the corner. Turn it off in Settings → General → Show on Isle.
 
 ## 0.9.7 · Nov 8, 2026

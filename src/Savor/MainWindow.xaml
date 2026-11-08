@@ -727,6 +727,20 @@
                                     </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <Button x:Name="ElevateButton" DockPanel.Dock="Right" Style="{StaticResource BaseButton}" FontWeight="Normal"
+                                            Click="Elevate_Click" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE7EF;" FontSize="12" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Restart as administrator"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel Margin="0,0,16,0">
+                                        <TextBlock Text="Capture priority" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="PriorityText" Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
                                 <StackPanel x:Name="CaptureMethodRow" Visibility="Collapsed">
                                     <DockPanel>
                                         <ComboBox x:Name="CaptureMethodCombo" DockPanel.Dock="Right" SelectionChanged="Capture_Changed" MinWidth="190">

@@ -2369,6 +2369,7 @@ public partial class MainWindow : Window
             if (!SelectByTag(FpsCombo, _settings.Fps)) SelectByTag(FpsCombo, 60);
             FillResolutions();
             SelectByTag(CaptureMethodCombo, _settings.GraphicsCapture ? "wgc" : "dda");
+            ShowPriority();
 
             QualityCombo.Items.Clear();
             foreach (var (q, label) in new[] {
@@ -2648,6 +2649,33 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowError(ex.Message); }
     }
 
+    // ===================== capture priority =====================
+
+    static readonly bool IsElevated = new System.Security.Principal.WindowsPrincipal(
+        System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+
+    void ShowPriority()
+    {
+        ElevateButton.Visibility = IsElevated ? Visibility.Collapsed : Visibility.Visible;
+        PriorityText.Text = IsElevated
+            ? "Realtime: Savor is running as administrator, so capture keeps up even when a game uses 100% of your GPU."
+            : "High. If clips stutter in games that max out your GPU, restart Savor as administrator for realtime priority " +
+              "(the same thing OBS does). Capping the game's FPS a little below its usual maximum also helps.";
+    }
+
+    async void Elevate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine.Recording) { Notify("Recording in progress", "Stop the recording first, then restart.", error: true); return; }
+        var exe = Environment.ProcessPath;
+        if (exe == null) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe, "--restart") { UseShellExecute = true, Verb = "runas" });
+        }
+        catch (System.ComponentModel.Win32Exception) { return; } // the Windows prompt was declined
+        await ExitAsync(); // the new Savor waits for this one to close
+    }
+
     // ===================== audio sync check =====================
 
     bool _syncChecking;
@@ -2814,6 +2842,7 @@ public partial class MainWindow : Window
         Line($"Audio: desktop {(_settings.DesktopAudio ? "on" : "off")} · mic {(string.IsNullOrEmpty(_settings.MicDeviceId) ? "off" : "on")} · " +
              $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
              (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));
+        Line($"Capture GPU priority: {_engine.GpuPriority}{(_engine.GpuPriority != "realtime" ? " (run Savor as administrator for realtime)" : "")}");
         Line($"Replay buffer: {(_engine.BufferActive ? "on" : "off")} ({_settings.ReplaySeconds} s) · recording {(_engine.Recording ? "yes" : "no")} · " +
              $"capture running {(_engine.IsRunning ? "yes" : "no")}");
         try
