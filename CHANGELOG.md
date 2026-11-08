@@ -1,5 +1,10 @@
 # What's new in Savor
 
+## 0.9.7 · Nov 8, 2026
+- Check audio sync (Settings → Audio): Savor flashes a square and plays a few beeps while recording, measures the gap between sound and picture on your PC, and corrects it for every new clip. Run it once; run it again to confirm.
+- More headroom for audio timing on busy PCs, so sound stays in sync even under heavy game load.
+- The editor's preview now keeps sound and picture within about 40 ms (it could drift up to 120 ms before), so nudging Audio sync by ear is accurate.
+
 ## 0.9.6 · Nov 7, 2026
 - Fixed audio being late in captures (around 0.1–0.2 s). Windows hands Savor recorded audio in batches, a bit after it was heard; Savor now times every piece of audio by when it was heard, on the same clock as the screen.
 - Audio sync fix for clips you've already saved: in the editor, nudge the sound earlier or later under Audio sync (Shift for bigger steps), hear it right away, then Export a fixed copy.

@@ -115,6 +115,8 @@ public sealed class AppSettings
     public int OutputHeight { get; set; } = 0;
     /// <summary>Capture the screen with Windows Graphics Capture (smoother for video players) instead of Desktop Duplication.</summary>
     public bool GraphicsCapture { get; set; } = false;
+    /// <summary>Audio sync correction measured on this PC by "Check audio sync" (seconds, positive = audio earlier).</summary>
+    public double AudioSyncCorrection { get; set; } = 0;
     /// <summary>Remove background noise (keyboard, fans, hum) from the mic with RNNoise.</summary>
     public bool MicNoiseSuppression { get; set; } = false;
     /// <summary>Results of "can the GPU resize for this encoder" checks, by encoder + size + driver.</summary>

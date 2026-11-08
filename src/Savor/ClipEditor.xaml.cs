@@ -487,10 +487,13 @@ public partial class ClipEditor : UserControl
             else if (now - _lastSyncTicks > 300 && _pendingSeek == null)
             {
                 // keep Savor's audio lined up with the video
-                if (_audio is { Ready: true } && now - _lastAudioSync > 500)
+                if (_audio is { Ready: true } && now - _lastAudioSync > 250)
                 {
+                    // Position is what's actually being heard (device clock), so this keeps the preview within ~40 ms
                     _lastAudioSync = now;
-                    if (Math.Abs((_audio.Position - Now).TotalMilliseconds) > 120) _audio.Seek(Now);
+                    var drift = _audio.Position - Now;
+                    // read ahead by what's still queued, so what's *heard* lands on the video's time
+                    if (Math.Abs(drift.TotalMilliseconds) > 40) _audio.Seek(Now + (_audio.FilePosition - _audio.Position));
                 }
                 // re-anchor to the real position if we've drifted noticeably
                 _lastSyncTicks = now;

@@ -848,6 +848,21 @@
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
                                 <DockPanel>
+                                    <Button x:Name="SyncCheckButton" DockPanel.Dock="Right" Style="{StaticResource BaseButton}" FontWeight="Normal"
+                                            Click="SyncCheck_Click" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE767;" FontSize="12" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Check audio sync"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel Margin="0,0,16,0">
+                                        <TextBlock Text="Audio sync" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="SyncCheckText" Style="{StaticResource RowDesc}"
+                                                   Text="Flashes a square and plays a few beeps while recording, then measures and fixes any delay between sound and picture on this PC. Takes about 15 seconds."/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
                                     <CheckBox x:Name="SeparateTracksToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="Capture_Changed"/>
                                     <StackPanel>
                                         <TextBlock Text="Separate audio tracks" Style="{StaticResource RowTitle}"/>

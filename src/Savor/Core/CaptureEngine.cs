@@ -371,6 +371,9 @@ public sealed class CaptureEngine : IDisposable
         return fc.ToString();
     }
 
+    /// <summary>Extra shift measured by "Check audio sync" on this PC (seconds; positive moves audio earlier).</summary>
+    public double AudioSyncCorrection { get; set; }
+
     // ---- capture method ----
     /// <summary>Capture the screen with Windows Graphics Capture instead of Desktop Duplication.</summary>
     public bool UseGraphicsCapture { get; set; }
@@ -393,9 +396,9 @@ public sealed class CaptureEngine : IDisposable
     /// The piped raw-audio input: stamped when ffmpeg reads it, minus the fixed release delay (see WriterLoop) and
     /// the 1024-sample packet ffmpeg waits for, so each sample's time is when it was heard.
     /// </summary>
-    public static string[] AudioInputArgs(int rate, int channels) => new[]
+    public static string[] AudioInputArgs(int rate, int channels, double correction = 0) => new[]
     {
-        "-itsoffset", (-(AudioDelay + 1024.0 / rate)).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
+        "-itsoffset", (-(AudioDelay + 1024.0 / rate + correction)).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
         "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
         "-f", "f32le", "-ar", rate.ToString(), "-ac", channels.ToString(), "-i", "pipe:0"
     };
@@ -443,7 +446,7 @@ public sealed class CaptureEngine : IDisposable
             // the time it arrives (same clock as the screen capture) and aresample=async keeps it locked to that:
             // start-up backlog is dropped, drift is gently corrected. -30 ms covers the remaining capture/pipe latency
             // (measured: ~±8 ms afterwards, vs a constant 300 ms off before).
-            a.AddRange(AudioInputArgs(rate, Math.Max(_inputSlots, _trackNames.Length) * 2));
+            a.AddRange(AudioInputArgs(rate, Math.Max(_inputSlots, _trackNames.Length) * 2, AudioSyncCorrection));
         }
 
         int tracks = audio ? Math.Max(1, _trackNames.Length) : 0;
@@ -677,7 +680,7 @@ public sealed class CaptureEngine : IDisposable
     // every 10 ms piece exactly AudioDelay after it was heard, and ffmpeg subtracts that known delay (-itsoffset):
     // the audio lands where it was heard, whatever the batching. (Measured in a simulation of bursty capture: within
     // ~15 ms, versus 110–180 ms late when audio was written as it arrived.)
-    const double AudioDelay = 0.25;     // seconds: comfortably more than the capture latency
+    const double AudioDelay = 0.4;      // seconds: comfortably more than the capture latency (even under heavy load)
     const double DeviceLatency = 0.010; // the newest sample in a batch was heard about this long before it arrived
     const int PieceFrames = 480;        // 10 ms at 48 kHz
 

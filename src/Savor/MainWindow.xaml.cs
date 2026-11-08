@@ -223,6 +223,7 @@ public partial class MainWindow : Window
         }
 
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId, _settings.DirectCaptureOff);
+        _engine.AudioSyncCorrection = _settings.AudioSyncCorrection;
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         bool gfx = await Ffmpeg.HasGraphicsCaptureAsync();
         CaptureMethodRow.Visibility = gfx ? Visibility.Visible : Visibility.Collapsed;
@@ -2020,6 +2021,20 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), $"graphics capture: available={gfx}, run: {r}\n");
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "graphics capture: FAILED " + ex.Message + "\n"); }
+        // sync-check analysis on a synthetic clip whose beeps are exactly 70 ms after its flashes
+        try
+        {
+            var f = Path.Combine(AppSettings.LocalDataDir, "synccheck-test.mp4");
+            await Ffmpeg.RunAsync(new[] { "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=black:s=1280x720:r=60:d=20,drawbox=x=560:y=300:w=160:h=120:color=white:t=fill:enable='gte(t,12)*lt(mod(t-12,0.7),0.1)'",
+                "-f", "lavfi", "-i", "aevalsrc='0.5*sin(2*PI*1000*t)*gte(t,12.07)*lt(mod(t-12.07,0.7),0.06)':s=48000:d=20",
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", f }, TimeSpan.FromSeconds(60));
+            var r = await SyncCheck.AnalyzeAsync(f, 11);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"sync check analysis: measured {(r.OffsetSeconds is { } o ? $"{o * 1000:0} ms" : "nothing")} (expected 70 ms) — {r.Detail}\n");
+            File.Delete(f);
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "sync check analysis: FAILED " + ex.Message + "\n"); }
         try { if (_editor != null) File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await _editor.SelfTestAudioSyncAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio sync UI: FAILED " + ex.Message + "\n"); }
 
@@ -2619,6 +2634,111 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { ShowError(ex.Message); }
     }
+
+    // ===================== audio sync check =====================
+
+    bool _syncChecking;
+
+    async void SyncCheck_Click(object sender, RoutedEventArgs e) => await RunSyncCheckAsync();
+
+    /// <summary>
+    /// Measures this PC's audio/video offset end to end: flashes a white square in the middle of the captured display
+    /// while playing a beep (8 times), saves the replay buffer, measures flash vs beep in the clip, and applies the
+    /// correction to future captures.
+    /// </summary>
+    async Task<string> RunSyncCheckAsync()
+    {
+        if (_syncChecking) return "busy";
+        if (!_engine.BufferActive || !_engine.IsRunning)
+        {
+            SyncCheckText.Text = "Turn on the replay buffer first (Alt + F8), then try again.";
+            return SyncCheckText.Text;
+        }
+        if (!_settings.DesktopAudio || _settings.DesktopMuted)
+        {
+            SyncCheckText.Text = "Turn on desktop audio (and unmute it) first — the test listens for its own beeps.";
+            return SyncCheckText.Text;
+        }
+        _syncChecking = true;
+        SyncCheckButton.IsEnabled = false;
+        string? clip = null;
+        try
+        {
+            SyncCheckText.Text = "Checking… a square will flash in the middle of your screen with a few beeps. Keep other sounds paused.";
+            await Task.Delay(2500); // make sure the buffer has recorded a little since any restart
+
+            // flash window on the captured display (physical pixels, so it's exactly where the capture looks)
+            var d = _engine.Display ?? _displays.FirstOrDefault();
+            var flash = new Window
+            {
+                WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, Topmost = true, ShowInTaskbar = false,
+                ShowActivated = false, Background = Brushes.Black, Width = 10, Height = 10, Left = -20000, Top = -20000,
+            };
+            flash.Show();
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(flash).Handle;
+            int size = d != null ? Math.Max(240, d.Height / 4) : 360;
+            int cx = d != null ? d.X + d.Width / 2 : 960, cy = d != null ? d.Y + d.Height / 2 : 540;
+            SetWindowPos(hwnd, new IntPtr(-1), cx - size / 2, cy - size / 2, size, size, 0x0010 | 0x0040);
+
+            var beeps = new BeepSource();
+            using var player = new NAudio.Wave.WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, 20);
+            player.Init(beeps);
+            player.Play();
+            await Task.Delay(500);
+            for (int i = 0; i < 8; i++)
+            {
+                flash.Background = Brushes.White;
+                beeps.Beep(0.06);
+                await Task.Delay(100);
+                flash.Background = Brushes.Black;
+                await Task.Delay(600);
+            }
+            player.Stop();
+            flash.Close();
+
+            SyncCheckText.Text = "Measuring…";
+            await Task.Delay(2500); // let the last beeps and frames reach the buffer
+            clip = await _engine.SaveReplayAsync();
+            if (clip == null) { SyncCheckText.Text = "Couldn't save the test recording. Try again."; return SyncCheckText.Text; }
+            var r = await SyncCheck.AnalyzeAsync(clip, lastSeconds: 11);
+            SelfLog("sync check: " + r.Detail);
+            if (r.OffsetSeconds is not { } off)
+            {
+                SyncCheckText.Text = r.Detail;
+                return "sync check: " + r.Detail;
+            }
+            int ms = (int)Math.Round(off * 1000);
+            if (Math.Abs(off) <= 0.02)
+            {
+                SyncCheckText.Text = $"In sync — sound and picture are within {Math.Max(1, Math.Abs(ms))} ms on this PC.";
+            }
+            else
+            {
+                _settings.AudioSyncCorrection = Math.Round(Math.Clamp(_settings.AudioSyncCorrection + off, -0.5, 1.0), 3);
+                _settings.Save();
+                _engine.AudioSyncCorrection = _settings.AudioSyncCorrection;
+                _captureDirty = true;
+                await ApplyCaptureChangesAsync();
+                SyncCheckText.Text = $"Sound was {Math.Abs(ms)} ms {(ms > 0 ? "late" : "early")} on this PC — fixed for new clips. " +
+                                     "Run the check again in a moment to confirm.";
+            }
+            return $"sync check: {ms} ms ({r.Detail})";
+        }
+        catch (Exception ex)
+        {
+            SyncCheckText.Text = "The check didn't work: " + ex.Message;
+            return SyncCheckText.Text;
+        }
+        finally
+        {
+            if (clip != null) try { File.Delete(clip); } catch { }
+            _syncChecking = false;
+            SyncCheckButton.IsEnabled = true;
+            ReloadClips();
+        }
+    }
+
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
     // ===================== diagnostics =====================
 

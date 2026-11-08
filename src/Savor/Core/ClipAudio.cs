@@ -103,9 +103,31 @@ public sealed class ClipAudio : IDisposable
     public bool Ready => _out != null;
     public bool IsPlaying => _out?.PlaybackState == PlaybackState.Playing;
 
-    /// <summary>What you're hearing right now (accounts for output latency).</summary>
-    public TimeSpan Position =>
-        _reader == null ? TimeSpan.Zero : _reader.CurrentTime - TimeSpan.FromSeconds(IsPlaying ? LatencySeconds : 0);
+    /// <summary>
+    /// What you're hearing right now: the file position minus the audio still queued in the output, measured from
+    /// the device's own clock (falls back to a typical latency if the clock isn't available).
+    /// </summary>
+    public TimeSpan Position
+    {
+        get
+        {
+            if (_reader == null) return TimeSpan.Zero;
+            var t = _reader.CurrentTime;
+            if (_out == null) return t;
+            try
+            {
+                double played = _out.GetPosition() / (double)_out.OutputWaveFormat.AverageBytesPerSecond;
+                var wf = _reader.WaveFormat;
+                double read = Interlocked.Read(ref _reader.SamplesRead) / (double)(wf.SampleRate * wf.Channels);
+                double queued = Math.Clamp(read - played, 0, 0.5);
+                return t - TimeSpan.FromSeconds(queued);
+            }
+            catch { return t - TimeSpan.FromSeconds(IsPlaying ? LatencySeconds : 0); }
+        }
+    }
+
+    /// <summary>Where the file is being read from (ahead of what's heard by the output's queue).</summary>
+    public TimeSpan FilePosition => _reader?.CurrentTime ?? TimeSpan.Zero;
 
     public void Play(TimeSpan at)
     {
@@ -165,10 +187,14 @@ public sealed class ClipAudio : IDisposable
             set { lock (_lock) _wav.CurrentTime = value; }
         }
 
+        /// <summary>Samples handed to the output so far (for working out how much is still queued).</summary>
+        public long SamplesRead;
+
         public int Read(float[] buffer, int offset, int count)
         {
             int n;
             lock (_lock) n = _samples.Read(buffer, offset, count);
+            Interlocked.Add(ref SamplesRead, n);
             float v = Volume;
             if (v != 1f) for (int i = 0; i < n; i++) buffer[offset + i] *= v;
             return n;
