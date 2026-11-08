@@ -764,16 +764,16 @@ public sealed class CaptureEngine : IDisposable
         if (p == null) return;
         try
         {
-            long mem = 0;
+            long total = 0;
             foreach (var pr in new[] { p, _capProc })
             {
                 if (pr == null) continue;
                 pr.Refresh();
                 if (pr.HasExited) return;
-                mem += pr.PrivateMemorySize64;
+                total += pr.PrivateMemorySize64;
             }
             // encoded video waiting between the two processes counts too (normally a few MB)
-            EngineMemory = mem + Interlocked.Read(ref _relayBytes);
+            EngineMemory = total + Interlocked.Read(ref _relayBytes);
         }
         catch { return; }
         if (EngineMemory < MemoryLimit) return;
