@@ -1843,7 +1843,7 @@ public partial class MainWindow : Window
         args.AddRange(CaptureEngine.AudioInputArgs(48000, 6));
         args.AddRange(new[] { "-filter_complex", $"[1:a]{CaptureEngine.AudioSync},asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]",
             "-map", "0:v", "-map", "[a0]", "-map", "[a1]", "-map", "[a2]", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-ar", "48000", "-t", "4",
+            "-c:a", "aac", "-ar", "48000", "-frames:v", "120", // (a -t limit doesn't work with -copyts system-clock timestamps)
             "-output_ts_offset", (-(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
             "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", outFile });
         var psi = Ffmpeg.StartInfo(args, redirectInput: true);
