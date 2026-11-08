@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.8 · Nov 8, 2026
+- Works with Isle, the Dynamic Island for Windows: while Isle is running, a live Recording card with a timer, Stop and Marker sits at the top of your screen, saved clips pop up there with a thumbnail and Edit / Copy / Show in folder, and Savor's notifications show there instead of in the corner. Turn it off in Settings → General → Show on Isle.
+
 ## 0.9.7 · Nov 8, 2026
 - Check audio sync (Settings → Audio): Savor flashes a square and plays a few beeps while recording, measures the gap between sound and picture on your PC, and corrects it for every new clip. Run it once; run it again to confirm.
 - More headroom for audio timing on busy PCs, so sound stays in sync even under heavy game load.

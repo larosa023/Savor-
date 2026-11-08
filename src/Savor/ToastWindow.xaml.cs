@@ -50,8 +50,10 @@ public partial class ToastWindow : Window
     }
 
     public static void Notify(string title, string body, bool error = false, Action? onClick = null,
-                              string? actionText = null, Action? action = null)
+                              string? actionText = null, Action? action = null, bool skipIsle = false)
     {
+        // With Isle running, Savor's notifications show on the island instead.
+        if (!skipIsle && Core.IsleLink.Notify(title, body, error, onClick, actionText, action)) return;
         _current?.Close();
         _current = new ToastWindow(title, body, error, onClick, actionText, action);
         _current.Show();

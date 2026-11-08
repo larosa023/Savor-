@@ -199,6 +199,13 @@ public static class Library
         catch { return path; } // name taken or file busy: the tag is enough
     }
 
+    /// <summary>Where a capture's cached thumbnail lives (it may not exist yet).</summary>
+    public static string? ThumbFor(string path)
+    {
+        try { return Path.Combine(ThumbDir, ThumbKey(new FileInfo(path)) + ".jpg"); }
+        catch { return null; }
+    }
+
     static string ThumbKey(FileInfo fi) => Hash($"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}");
 
     /// <summary>Loads or generates a cached thumbnail + duration for a clip (on a background thread).</summary>

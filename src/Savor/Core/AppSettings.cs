@@ -170,6 +170,8 @@ public sealed class AppSettings
 
     public bool CloseToTray { get; set; } = true;
     public bool ShowNotifications { get; set; } = true;
+    /// <summary>When Isle (the Dynamic Island for Windows) is running, show recordings, saved clips and notifications there.</summary>
+    public bool ShowOnIsle { get; set; } = true;
     /// <summary>Quiet chime when a capture is saved (off by default).</summary>
     public bool PlaySaveSound { get; set; } = false;
     /// <summary>Save chime volume, 0–1 (0.5 = the original quiet chime).</summary>

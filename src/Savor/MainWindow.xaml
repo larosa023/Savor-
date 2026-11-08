@@ -1006,6 +1006,14 @@
                                 </DockPanel>
                                 <Border Style="{StaticResource Divider}"/>
                                 <DockPanel>
+                                    <CheckBox x:Name="IsleToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Show on Isle when it's running" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Recordings, saved clips and notifications appear in Isle's island at the top of the screen, with Stop, Marker and Edit buttons." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
                                     <CheckBox x:Name="SoundToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="General_Changed"/>
                                     <StackPanel>
                                         <TextBlock Text="Play a sound when a capture is saved" Style="{StaticResource RowTitle}"/>

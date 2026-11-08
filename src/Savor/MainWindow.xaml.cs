@@ -168,6 +168,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        IsleLink.Start(() => _settings.ShowOnIsle);
         if (_justUpdated) Notify($"Updated to Savor {Updater.Current}", "You're on the latest version.");
         _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(6) };
         _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync(userInitiated: false);
@@ -318,9 +319,10 @@ public partial class MainWindow : Window
     {
         if (_settings.PlaySaveSound) Chime.Play(_settings.SaveSoundVolume);
         ReloadClips();
-        if (_settings.ShowNotifications)
+        if (_settings.ShowNotifications &&
+            !IsleLink.Saved(path, recording, () => EditFromToast(path), () => Reveal(path), () => Library.ThumbFor(path)))
             ToastWindow.Notify(recording ? "Recording saved" : "Clip saved", Path.GetFileName(path),
-                onClick: () => Reveal(path), actionText: "Edit", action: () => EditFromToast(path));
+                onClick: () => Reveal(path), actionText: "Edit", action: () => EditFromToast(path), skipIsle: true);
         _ = EnforceStorageAsync(path);
     }
 
@@ -433,6 +435,7 @@ public partial class MainWindow : Window
     void RefreshState()
     {
         bool buffer = _engine.BufferActive, rec = _engine.Recording;
+        SyncIsle();
 
         _loadingUi = true;
         BufferToggle.IsChecked = buffer;
@@ -489,8 +492,16 @@ public partial class MainWindow : Window
         UpdateTrackLabels();
     }
 
+    /// <summary>Keeps Isle's "Recording" card in step (also picks Isle up if it starts mid-recording).</summary>
+    void SyncIsle() => IsleLink.Recording(_engine.Recording, _engine.RecordingStartedUtc,
+        stop: () => { if (_engine.Recording) _ = ToggleRecordAsync(); },
+        marker: AddMarker);
+
+    int _isleTicks;
+
     void Tick()
     {
+        if (_engine.Recording && ++_isleTicks % 15 == 0) SyncIsle();
         if (_engine.Recording)
         {
             var t = DateTime.UtcNow - _engine.RecordingStartedUtc;
@@ -2401,6 +2412,7 @@ public partial class MainWindow : Window
             StartupToggle.IsChecked = StartupManager.IsEnabled;
             TrayToggle.IsChecked = _settings.CloseToTray;
             NotifyToggle.IsChecked = _settings.ShowNotifications;
+            IsleToggle.IsChecked = _settings.ShowOnIsle;
             SoundToggle.IsChecked = _settings.PlaySaveSound;
             SoundVolumeSlider.Value = Math.Round(_settings.SaveSoundVolume * 100);
             SoundVolumeValue.Text = $"{SoundVolumeSlider.Value:0}%";
@@ -2584,6 +2596,7 @@ public partial class MainWindow : Window
         _settings.StartBufferOnLaunch = AutoBufferToggle.IsChecked == true;
         _settings.CloseToTray = TrayToggle.IsChecked == true;
         _settings.ShowNotifications = NotifyToggle.IsChecked == true;
+        _settings.ShowOnIsle = IsleToggle.IsChecked == true;
         bool soundWasOn = _settings.PlaySaveSound;
         _settings.PlaySaveSound = SoundToggle.IsChecked == true;
         if (_settings.PlaySaveSound && !soundWasOn) Chime.Play(_settings.SaveSoundVolume); // let them hear it
@@ -2960,6 +2973,7 @@ public partial class MainWindow : Window
             Notify("Finishing recording…", "Savor will close once it's saved.");
         }
         try { await _engine.ShutdownAsync(); } catch { }
+        IsleLink.Stop();
         _hotkeys?.Dispose();
         _tray?.Dispose();
         _engine.Dispose();
