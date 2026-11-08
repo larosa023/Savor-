@@ -2661,10 +2661,19 @@ public partial class MainWindow : Window
     void ShowPriority()
     {
         ElevateButton.Visibility = IsElevated ? Visibility.Collapsed : Visibility.Visible;
-        PriorityText.Text = IsElevated
-            ? "Realtime: Savor is running as administrator, so capture keeps up even when a game uses 100% of your GPU."
-            : "High. If clips stutter in games that max out your GPU, restart Savor as administrator for realtime priority " +
-              "(the same thing OBS does). Capping the game's FPS a little below its usual maximum also helps.";
+        // say what Windows actually applied, not what we asked for
+        var gp = _engine.GpuPriority;
+        const string cap = " Capping the game's FPS a little below its usual maximum also helps.";
+        PriorityText.Text = gp switch
+        {
+            "realtime" => "Realtime: capture keeps up even when a game uses 100% of your GPU.",
+            "high" => IsElevated ? "High (Windows didn't allow realtime)." + cap
+                                 : "High. If clips stutter in games that max out your GPU, restart Savor as administrator for realtime priority (the same thing OBS does)." + cap,
+            "pending" => "Applying… (check again in a few seconds)",
+            _ when !_engine.IsRunning => "Applied when capture starts.",
+            _ => "Normal: Windows didn't accept a higher GPU priority on this PC, so games that max out your GPU can make clips stutter." + cap
+        };
+        if (gp == "pending") _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.InvokeAsync(ShowPriority));
     }
 
     async void Elevate_Click(object sender, RoutedEventArgs e)
