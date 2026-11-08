@@ -117,6 +117,8 @@ public sealed class AppSettings
     public bool GraphicsCapture { get; set; } = false;
     /// <summary>Audio sync correction measured on this PC by "Check audio sync" (seconds, positive = audio earlier).</summary>
     public double AudioSyncCorrection { get; set; } = 0;
+    /// <summary>Which capture design AudioSyncCorrection was measured with (2 = separate screen-capture process).</summary>
+    public int AudioSyncCorrectionFor { get; set; } = 0;
     /// <summary>Remove background noise (keyboard, fans, hum) from the mic with RNNoise.</summary>
     public bool MicNoiseSuppression { get; set; } = false;
     /// <summary>Results of "can the GPU resize for this encoder" checks, by encoder + size + driver.</summary>

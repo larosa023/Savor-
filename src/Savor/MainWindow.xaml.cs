@@ -224,6 +224,13 @@ public partial class MainWindow : Window
         }
 
         _engine.Encoder = Ffmpeg.Pick(_encoders, _settings.EncoderId, _settings.DirectCaptureOff);
+        if (_settings.AudioSyncCorrectionFor < 2)
+        {
+            // measured before 0.9.12, when screen frames could be held back and stamped late: no longer valid
+            _settings.AudioSyncCorrection = 0;
+            _settings.AudioSyncCorrectionFor = 2;
+            _settings.Save();
+        }
         _engine.AudioSyncCorrection = _settings.AudioSyncCorrection;
         try { await PrepareScaleAsync(); } catch { _engine.GpuScale = false; }
         bool gfx = await Ffmpeg.HasGraphicsCaptureAsync();
@@ -1842,54 +1849,103 @@ public partial class MainWindow : Window
         return "library: " + sb;
     }
 
-    /// <summary>CI only: the capture's audio input (timestamped pipe + sync) with real-time audio fed like the mixer does.</summary>
+    /// <summary>
+    /// CI only: the capture as it runs with audio. A separate process encodes a 60 fps test picture (every frame
+    /// different), Savor relays it to the mux process, which adds 3 audio tracks fed over the named pipe exactly like
+    /// the mixer does (each 10 ms piece released 0.4 s after it was "heard"). Counts repeated frames: they mean the
+    /// screen capture was held up.
+    /// </summary>
     static async Task<string> SelfTestAudioPipeAsync()
     {
         if (Ffmpeg.Path == null) return "audio pipe: no ffmpeg";
         var dir = Path.Combine(AppSettings.LocalDataDir, "pipe-test");
+        try { Directory.Delete(dir, true); } catch { }
         Directory.CreateDirectory(dir);
         var outFile = Path.Combine(dir, "seg_%03d.ts");
-        // same clock setup as capture: wall-clock video and audio, -copyts, timeline shifted back to ~0
-        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-nostdin", "-copyts",
-            "-use_wallclock_as_timestamps", "1", "-f", "lavfi", "-i", "color=black:s=320x180:r=30,realtime" };
-        args.AddRange(CaptureEngine.AudioInputArgs(48000, 6));
-        args.AddRange(new[] { "-filter_complex", $"[1:a]{CaptureEngine.AudioSync},asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]",
-            "-map", "0:v", "-map", "[a0]", "-map", "[a1]", "-map", "[a2]", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-ar", "48000", "-frames:v", "120", // (a -t limit doesn't work with -copyts system-clock timestamps)
-            "-output_ts_offset", (-(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
+        var pipeName = $"savor-test-{Guid.NewGuid():N}";
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        var capArgs = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-copyts",
+            "-use_wallclock_as_timestamps", "1", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=60,realtime",
+            "-map", "0:v", "-vf", "fps=60", "-c:v", "libx264", "-preset", "ultrafast", "-g", "120", "-bf", "0", "-f", "nut", "pipe:1" };
+        var muxArgs = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-nostdin", "-copyts",
+            "-probesize", "32", "-analyzeduration", "0", "-f", "nut", "-i", "pipe:0" };
+        muxArgs.AddRange(CaptureEngine.AudioInputArgs(48000, 6, 0, @"\\.\pipe\" + pipeName));
+        muxArgs.AddRange(new[] { "-filter_complex", $"[1:a]{CaptureEngine.AudioSync},asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]",
+            "-map", "0:v", "-map", "[a0]", "-map", "[a1]", "-map", "[a2]", "-c:v", "copy", "-c:a", "aac", "-ar", "48000",
+            "-output_ts_offset", (-(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds).ToString("0.######", inv),
             "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", outFile });
-        var psi = Ffmpeg.StartInfo(args, redirectInput: true);
-        using var p = Process.Start(psi)!;
-        var errTask = p.StandardError.ReadToEndAsync();
-        await Task.Delay(400); // like Savor: audio builds up while ffmpeg starts
-        var stdin = p.StandardInput.BaseStream;
-        var chunk = new byte[480 * 6 * 4]; // 10 ms, 6 channels
-        var sw = Stopwatch.StartNew();
+
+        using var audioPipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.Out, 1,
+            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous, 0, 1 << 16);
+        using var cap = Process.Start(Ffmpeg.StartInfo(capArgs, redirectInput: true))!;
+        using var mux = Process.Start(Ffmpeg.StartInfo(muxArgs, redirectInput: true))!;
+        var capErr = cap.StandardError.ReadToEndAsync();
+        var muxErr = mux.StandardError.ReadToEndAsync();
+        _ = mux.StandardOutput.ReadToEndAsync();
+        var (rIn, rOut) = VideoRelay.Start(cap.StandardOutput.BaseStream, mux.StandardInput.BaseStream);
+
+        string connect = "ok";
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+            try { await audioPipe.WaitForConnectionAsync(cts.Token); } catch (Exception ex) { connect = ex.GetType().Name; }
         long sent = 0;
-        try
+        if (connect == "ok")
         {
-            while (!p.HasExited && sw.Elapsed < TimeSpan.FromSeconds(6))
+            var chunk = new byte[480 * 6 * 4]; // 10 ms, 6 channels
+            var sw = Stopwatch.StartNew();
+            await Task.Run(() =>
             {
-                long due = (long)(sw.Elapsed.TotalSeconds * 100) + 40; // + the 400 ms backlog
-                while (sent < due) { await stdin.WriteAsync(chunk); sent++; }
-                await Task.Delay(5);
-            }
+                try
+                {
+                    while (!mux.HasExited && sw.Elapsed < TimeSpan.FromSeconds(8))
+                    {
+                        // like WriterLoop: each piece goes out 0.4 s after it was heard
+                        while ((sent + 40) * 10 <= sw.ElapsedMilliseconds) { audioPipe.Write(chunk); sent++; }
+                        Thread.Sleep(2);
+                    }
+                }
+                catch { }
+            });
         }
-        catch { }
-        try { p.StandardInput.Close(); } catch { }
-        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
-            try { await p.WaitForExitAsync(cts.Token); } catch (OperationCanceledException) { try { p.Kill(true); } catch { } }
-        var err = (await errTask).Trim();
-        var segs = Directory.GetFiles(dir, "*.ts");
+        try { cap.StandardInput.Write('q'); cap.StandardInput.Flush(); } catch { }
+        try { audioPipe.Dispose(); } catch { }
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        {
+            try { await cap.WaitForExitAsync(cts.Token); } catch (OperationCanceledException) { try { cap.Kill(true); } catch { } }
+            rIn.Join(3000); rOut.Join(3000);
+            try { await mux.WaitForExitAsync(cts.Token); } catch (OperationCanceledException) { try { mux.Kill(true); } catch { } }
+        }
+        var err = ((await capErr) + " " + (await muxErr)).Trim();
+
+        var segs = Directory.GetFiles(dir, "*.ts").OrderBy(f => f).ToArray();
         string info = "";
         if (segs.Length > 0)
         {
             var (_, e) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", segs[0] }, TimeSpan.FromSeconds(10));
             var st = System.Text.RegularExpressions.Regex.Match(e, @"start: ([\d.]+)");
             info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, "Audio:").Count}, timeline starts at {(st.Success ? st.Groups[1].Value : "?")} s";
+            // repeated frames in the middle pieces (the test picture changes every frame)
+            int frames = 0, repeats = 0;
+            foreach (var seg in segs.Skip(1).Take(Math.Max(0, segs.Length - 2)))
+            {
+                var psi = Ffmpeg.StartInfo(new[] { "-v", "error", "-i", seg, "-an", "-fps_mode", "passthrough", "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "-" });
+                using var d = Process.Start(psi)!;
+                _ = d.StandardError.ReadToEndAsync();
+                var ms = new MemoryStream();
+                await d.StandardOutput.BaseStream.CopyToAsync(ms);
+                await d.WaitForExitAsync();
+                var raw = ms.ToArray();
+                const int F = 64 * 36;
+                for (int i = 1; i * F + F <= raw.Length; i++)
+                {
+                    frames++;
+                    if (raw.AsSpan((i - 1) * F, F).SequenceEqual(raw.AsSpan(i * F, F))) repeats++;
+                }
+            }
+            info += $", repeated frames {repeats} of {frames}";
         }
         try { Directory.Delete(dir, true); } catch { }
-        return $"audio pipe: exit={p.ExitCode}, pieces={segs.Length}, {info}{(err.Length > 0 ? " | ffmpeg: " + err.Replace('\n', ' ')[..Math.Min(300, err.Length)] : "")}";
+        return $"audio pipe (two processes): pipe {connect}, audio sent {sent / 100.0:0.0} s, exit={cap.ExitCode}/{mux.ExitCode}, pieces={segs.Length}, {info}{(err.Length > 0 ? " | ffmpeg: " + err.Replace('\n', ' ')[..Math.Min(300, err.Length)] : "")}";
     }
 
     /// <summary>CI only: runs the mic noise suppression graph on synthetic noise and compares levels.</summary>
@@ -2769,6 +2825,7 @@ public partial class MainWindow : Window
             else
             {
                 _settings.AudioSyncCorrection = Math.Round(Math.Clamp(_settings.AudioSyncCorrection + off, -0.5, 1.0), 3);
+                _settings.AudioSyncCorrectionFor = 2;
                 _settings.Save();
                 _engine.AudioSyncCorrection = _settings.AudioSyncCorrection;
                 _captureDirty = true;

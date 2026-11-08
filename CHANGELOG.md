@@ -1,5 +1,9 @@
 # What's new in Savor
 
+## 0.9.12 · Nov 8, 2026
+- Fixed choppy clips (freezing for a split second every half second), even with no game running. Since the audio sync fix, FFmpeg kept pausing the screen capture to wait for the audio and dropped screen frames. Screen capture now runs in its own process that nothing can pause, and Savor passes its video on to be combined with the audio, so every frame is kept. Audio sync works exactly as before.
+- Any previous "Check audio sync" result is reset, since it was measured with the old timing. Run it again if sound ever seems off.
+
 ## 0.9.11 · Nov 8, 2026
 - Settings → Capture priority now shows the GPU priority Windows actually gave the capture (realtime, high or normal), not just whether Savor runs as administrator.
 

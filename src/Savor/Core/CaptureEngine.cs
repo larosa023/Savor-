@@ -24,7 +24,11 @@ public sealed class CaptureEngine : IDisposable
     readonly Timer _cleanupTimer;
     readonly LinkedList<string> _log = new();
 
-    Process? _proc;
+    Process? _proc;      // writes the replay pieces (with audio: adds the sound to the video coming from _capProc)
+    Process? _capProc;   // with audio: grabs and encodes the screen on its own, so nothing can hold it back
+    Thread? _relayIn, _relayOut;
+    long _relayBytes;    // encoded video waiting between the two processes
+    System.IO.Pipes.NamedPipeServerStream? _audioPipe;
     AudioMixer? _mixer;
     BlockingCollection<(byte[] data, long heard)>? _audioQueue; // chunk + when its first sample was heard (Stopwatch ticks)
     int _audioRate = 48000, _audioFrameBytes = 8;
@@ -112,7 +116,13 @@ public sealed class CaptureEngine : IDisposable
 
     public TimeSpan CpuTime
     {
-        get { try { return _proc is { HasExited: false } p ? p.TotalProcessorTime : TimeSpan.Zero; } catch { return TimeSpan.Zero; } }
+        get
+        {
+            TimeSpan t = TimeSpan.Zero;
+            foreach (var p in new[] { _proc, _capProc })
+                try { if (p is { HasExited: false }) t += p.TotalProcessorTime; } catch { }
+            return t;
+        }
     }
 
     /// <summary>Raised whenever BufferActive / Recording / running state changes (any thread).</summary>
@@ -324,39 +334,91 @@ public sealed class CaptureEngine : IDisposable
         _inputSlots = audio && _mixer != null ? _mixer.InputSlots : 0;
         _micSlot = audio && _mixer != null ? _mixer.MicSlot : -1;
         _micIsTrack = audio && _mixer != null && _mixer.MicIsTrack;
-        var args = BuildArgs(s, enc, audio, rate);
+        bool split = audio && _audioQueue != null; // with audio: separate screen-capture process (see ArgsMode)
+        string? pipeName = split ? $"savor-audio-{Environment.ProcessId}-{Guid.NewGuid():N}" : null;
+        Process? cap = null;
+        if (split)
+        {
+            try
+            {
+                _audioPipe = new System.IO.Pipes.NamedPipeServerStream(pipeName!, System.IO.Pipes.PipeDirection.Out, 1,
+                    System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous, 0, 1 << 16);
+            }
+            catch (Exception ex)
+            {
+                AddLog("Audio pipe unavailable: " + ex.Message);
+                TeardownAudio();
+                throw;
+            }
+        }
+        var args = BuildArgs(s, enc, audio, rate, split ? ArgsMode.Mux : ArgsMode.Single, pipeName != null ? @"\\.\pipe\" + pipeName : null);
         var p = new Process { StartInfo = Ffmpeg.StartInfo(args, redirectInput: true), EnableRaisingEvents = true };
         if (_micSlot >= 0 && NoiseModel.Directory is { } nd) p.StartInfo.WorkingDirectory = nd; // arnndn finds its model here
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) AddLog(e.Data!); };
         p.OutputDataReceived += (_, _) => { };
         p.Exited += OnProcessExited;
         _expectedExit = false;
-        try { p.Start(); }
+        try
+        {
+            if (split)
+            {
+                cap = new Process { StartInfo = Ffmpeg.StartInfo(BuildArgs(s, enc, audio, rate, ArgsMode.Capture), redirectInput: true), EnableRaisingEvents = true };
+                cap.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) AddLog(e.Data!); };
+                cap.Exited += OnProcessExited;
+                cap.Start();
+                ChildProcesses.Track(cap);
+            }
+            p.Start();
+        }
         catch
         {
+            if (cap != null) { try { if (!cap.HasExited) cap.Kill(true); } catch { } cap.Dispose(); }
             TeardownAudio();
             p.Dispose();
             throw;
         }
         ChildProcesses.Track(p);
-        try { p.PriorityClass = ProcessPriorityClass.High; } catch { try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { } }
+        foreach (var pr in new[] { p, cap })
+            if (pr != null)
+                try { pr.PriorityClass = ProcessPriorityClass.High; } catch { try { pr.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { } }
         // Windows only accepts a GPU priority once the process has opened the GPU (the screen capture does that
         // a moment after start), so try a few times.
+        var gpuProc = cap ?? p;
         GpuPriority = "pending";
         _ = Task.Run(async () =>
         {
             foreach (var wait in new[] { 1500, 2500, 4000, 8000 })
             {
                 await Task.Delay(wait);
-                if (p.HasExited || !ReferenceEquals(_proc, p)) return;
-                var r = RaiseGpuPriority(p);
+                if (gpuProc.HasExited || !ReferenceEquals(_proc, p)) return;
+                var r = RaiseGpuPriority(gpuProc);
                 GpuPriority = r;
                 if (!r.StartsWith("normal")) break;
             }
             AddLog($"Capture GPU priority: {GpuPriority}");
         });
         _audioOn = audio;
-        if (audio && _audioQueue != null)
+        if (split && cap != null && _audioPipe != null && _audioQueue != null)
+        {
+            // encoded screen: capture process → Savor → mux process
+            Interlocked.Exchange(ref _relayBytes, 0);
+            (_relayIn, _relayOut) = VideoRelay.Start(cap.StandardOutput.BaseStream, p.StandardInput.BaseStream,
+                                                     n => Interlocked.Add(ref _relayBytes, n));
+
+            // audio goes over the named pipe once the mux process opens it
+            var pipe = _audioPipe;
+            var q = _audioQueue;
+            _writer = new Thread(() =>
+            {
+                try { pipe.WaitForConnectionAsync().Wait(); }
+                catch { _audioConnected = false; return; }
+                while (q.TryTake(out _)) { } // audio from before the pipe opened can no longer be placed correctly
+                WriterLoop(pipe, q);
+            }) { IsBackground = true, Name = "Savor audio feed", Priority = ThreadPriority.Highest };
+            _audioConnected = true;
+            _writer.Start();
+        }
+        else if (audio && _audioQueue != null)
         {
             // Audio goes to ffmpeg over stdin (raw 32-bit float PCM).
             var stdin = p.StandardInput.BaseStream;
@@ -367,6 +429,8 @@ public sealed class CaptureEngine : IDisposable
         }
         p.BeginErrorReadLine();
         p.BeginOutputReadLine();
+        if (cap != null) cap.BeginErrorReadLine();
+        _capProc = cap;
         _proc = p;
         StartedUtc = DateTime.UtcNow;
     }
@@ -435,25 +499,38 @@ public sealed class CaptureEngine : IDisposable
     /// The piped raw-audio input: stamped when ffmpeg reads it, minus the fixed release delay (see WriterLoop) and
     /// the 1024-sample packet ffmpeg waits for, so each sample's time is when it was heard.
     /// </summary>
-    public static string[] AudioInputArgs(int rate, int channels, double correction = 0) => new[]
+    public static string[] AudioInputArgs(int rate, int channels, double correction = 0, string input = "pipe:0") => new[]
     {
         "-itsoffset", (-(AudioDelay + 1024.0 / rate + correction)).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture),
         "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
-        "-f", "f32le", "-ar", rate.ToString(), "-ac", channels.ToString(), "-i", "pipe:0"
+        "-f", "f32le", "-ar", rate.ToString(), "-ac", channels.ToString(), "-i", input
     };
 
-    List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate)
+    // ---- two-process capture (with audio) ----
+    // Audio is deliberately written AudioDelay late (see WriterLoop), and ffmpeg never lets one stream get more than
+    // 0.1 s ahead of another: in a single process it kept pausing the screen grab to wait for the audio, so screen
+    // frames were lost (clips froze ~0.3 s every ~0.4 s). Now one ffmpeg grabs and encodes the screen with nothing
+    // to wait for, and Savor hands the encoded video (NUT over a pipe, timestamps intact) to a second ffmpeg that adds
+    // the audio and writes the pieces. The video waits there instead, already encoded, so no frame is lost.
+    public enum ArgsMode { Single, Capture, Mux }
+
+    List<string> BuildArgs(AppSettings s, EncoderChoice enc, bool audio, int rate, ArgsMode mode = ArgsMode.Single, string? audioPipe = null)
     {
         var d = Display;
         int fps = s.Fps;
         var a = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y" };
-        if (audio) a.Add("-nostdin"); // stdin carries audio, not keyboard commands
+        if (audio && mode != ArgsMode.Capture) a.Add("-nostdin"); // stdin carries data, not keyboard commands
         // With audio, screen frames and audio are both stamped on the system clock and kept as-is (-copyts), so they
         // line up exactly; -output_ts_offset below brings the timeline back to start near zero.
         if (audio) a.Add("-copyts");
         var clock = audio ? new[] { "-use_wallclock_as_timestamps", "1" } : Array.Empty<string>();
 
-        if (enc.Pipeline == CapturePipeline.Gdi)
+        if (mode == ArgsMode.Mux)
+        {
+            // the encoded screen from the capture process, timestamps as captured
+            a.AddRange(new[] { "-probesize", "32", "-analyzeduration", "0", "-f", "nut", "-i", "pipe:0" });
+        }
+        else if (enc.Pipeline == CapturePipeline.Gdi)
         {
             a.AddRange(clock);
             a.AddRange(new[] { "-f", "gdigrab", "-framerate", fps.ToString(), "-draw_mouse", s.CaptureCursor ? "1" : "0" });
@@ -485,7 +562,19 @@ public sealed class CaptureEngine : IDisposable
             // the time it arrives (same clock as the screen capture) and aresample=async keeps it locked to that:
             // start-up backlog is dropped, drift is gently corrected. -30 ms covers the remaining capture/pipe latency
             // (measured: ~±8 ms afterwards, vs a constant 300 ms off before).
-            a.AddRange(AudioInputArgs(rate, Math.Max(_inputSlots, _trackNames.Length) * 2, AudioSyncCorrection));
+            if (mode != ArgsMode.Capture)
+                a.AddRange(AudioInputArgs(rate, Math.Max(_inputSlots, _trackNames.Length) * 2, AudioSyncCorrection, audioPipe ?? "pipe:0"));
+        }
+
+        if (mode == ArgsMode.Capture)
+        {
+            // encode only, as smooth constant-rate video (system-clock timestamps start far from zero, so the fps
+            // filter rather than -fps_mode cfr, which would try to fill from zero)
+            var cvf = Ffmpeg.VideoFilter(enc, Ffmpeg.OutputSize(d, s.OutputHeight), GpuScale);
+            a.AddRange(new[] { "-map", "0:v", "-vf", $"fps={fps}" + (cvf != null ? "," + cvf : "") });
+            a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
+            a.AddRange(new[] { "-f", "nut", "pipe:1" });
+            return a;
         }
 
         int tracks = audio ? Math.Max(1, _trackNames.Length) : 0;
@@ -516,9 +605,14 @@ public sealed class CaptureEngine : IDisposable
             for (int t = 0; tracks > 1 && t < tracks; t++) a.AddRange(new[] { "-map", $"[a{t}]" });
         }
 
-        var vf = Ffmpeg.VideoFilter(enc, Ffmpeg.OutputSize(d, s.OutputHeight), GpuScale);
-        if (vf != null) a.AddRange(new[] { "-vf", vf });
-        a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
+        if (mode == ArgsMode.Mux)
+            a.AddRange(new[] { "-c:v", "copy" });
+        else
+        {
+            var vf = Ffmpeg.VideoFilter(enc, Ffmpeg.OutputSize(d, s.OutputHeight), GpuScale);
+            if (vf != null) a.AddRange(new[] { "-vf", vf });
+            a.AddRange(Ffmpeg.EncoderArgs(enc.Def, s.Quality, fps));
+        }
 
         // (no -shortest: for live capture it only adds a queue that can hold raw video frames while waiting on audio)
         if (audio) a.AddRange(new[] { "-c:a", "aac", "-b:a", tracks > 1 ? "160k" : "192k", "-ar", "48000" });
@@ -543,11 +637,27 @@ public sealed class CaptureEngine : IDisposable
     void StopProcess()
     {
         var p = _proc;
-        if (p == null) return;
+        var cap = _capProc;
+        if (p == null && cap == null) return;
         _expectedExit = true;
         try
         {
-            if (!p.HasExited)
+            if (cap != null)
+            {
+                // two processes: stop the screen capture ('q' finishes its video cleanly), end the audio, and the
+                // mux process finishes its last piece once both inputs have ended
+                try { if (!cap.HasExited) { cap.StandardInput.Write('q'); cap.StandardInput.Flush(); } } catch { }
+                _mixer?.Stop();
+                try { _audioQueue?.CompleteAdding(); } catch { }
+                if (_audioPipe is { IsConnected: false }) try { _audioPipe.Dispose(); } catch { } // writer still waiting to connect
+                _writer?.Join(2000);
+                try { _audioPipe?.Dispose(); } catch { }
+                if (!cap.WaitForExit(8000)) { try { cap.Kill(true); } catch { } cap.WaitForExit(2000); }
+                _relayIn?.Join(2000);
+                _relayOut?.Join(3000);
+                if (p != null && !p.HasExited && !p.WaitForExit(8000)) { try { p.Kill(true); } catch { } p.WaitForExit(2000); }
+            }
+            else if (p != null && !p.HasExited)
             {
                 if (_audioOn)
                 {
@@ -572,14 +682,17 @@ public sealed class CaptureEngine : IDisposable
         finally
         {
             TeardownAudio();
-            try { p.Dispose(); } catch { }
+            try { p?.Dispose(); } catch { }
+            try { cap?.Dispose(); } catch { }
             _proc = null;
+            _capProc = null;
+            _relayIn = _relayOut = null;
         }
     }
 
     void OnProcessExited(object? sender, EventArgs e)
     {
-        if (_expectedExit || !ReferenceEquals(sender, _proc)) return;
+        if (_expectedExit || !(ReferenceEquals(sender, _proc) || (_capProc != null && ReferenceEquals(sender, _capProc)))) return;
         // died within 10 s of starting = a failed start; otherwise a one-off interruption
         bool quick = (DateTime.UtcNow - StartedUtc).TotalSeconds < 10;
         if (quick) Interlocked.Increment(ref _failures);
@@ -651,9 +764,16 @@ public sealed class CaptureEngine : IDisposable
         if (p == null) return;
         try
         {
-            p.Refresh();
-            if (p.HasExited) return;
-            EngineMemory = p.PrivateMemorySize64;
+            long mem = 0;
+            foreach (var pr in new[] { p, _capProc })
+            {
+                if (pr == null) continue;
+                pr.Refresh();
+                if (pr.HasExited) return;
+                mem += pr.PrivateMemorySize64;
+            }
+            // encoded video waiting between the two processes counts too (normally a few MB)
+            EngineMemory = mem + Interlocked.Read(ref _relayBytes);
         }
         catch { return; }
         if (EngineMemory < MemoryLimit) return;
@@ -775,6 +895,8 @@ public sealed class CaptureEngine : IDisposable
             _mixer = null;
         }
         try { _audioQueue?.CompleteAdding(); } catch { }
+        try { _audioPipe?.Dispose(); } catch { } // also ends a writer still waiting for the pipe to open
+        _audioPipe = null;
         _writer?.Join(1500);
         _writer = null;
         _audioQueue?.Dispose();
@@ -908,5 +1030,50 @@ public sealed class CaptureEngine : IDisposable
         _cleanupTimer.Dispose();
         StopProcess();
         ClearBufferDir();
+    }
+}
+
+/// <summary>
+/// Copies the capture process's encoded video to the mux process. Reading and writing run on separate threads with
+/// a queue between them, so the capture process never waits, however long the mux process holds its input.
+/// </summary>
+public static class VideoRelay
+{
+    /// <param name="queued">Called with +bytes when a chunk is queued and -bytes when it has been passed on.</param>
+    public static (Thread reader, Thread writer) Start(Stream from, Stream to, Action<long>? queued = null)
+    {
+        var chunks = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>());
+        var reader = new Thread(() =>
+        {
+            var buf = new byte[1 << 16];
+            try
+            {
+                int n;
+                while ((n = from.Read(buf, 0, buf.Length)) > 0)
+                {
+                    chunks.Add(buf.AsSpan(0, n).ToArray());
+                    queued?.Invoke(n);
+                }
+            }
+            catch { }
+            finally { chunks.CompleteAdding(); }
+        }) { IsBackground = true, Name = "Savor video relay in", Priority = ThreadPriority.Highest };
+        var writer = new Thread(() =>
+        {
+            try
+            {
+                foreach (var c in chunks.GetConsumingEnumerable())
+                {
+                    to.Write(c, 0, c.Length);
+                    to.Flush();
+                    queued?.Invoke(-c.Length);
+                }
+            }
+            catch { }
+            finally { try { to.Close(); } catch { } } // end of video: the mux process finishes its last piece
+        }) { IsBackground = true, Name = "Savor video relay out", Priority = ThreadPriority.AboveNormal };
+        reader.Start();
+        writer.Start();
+        return (reader, writer);
     }
 }
