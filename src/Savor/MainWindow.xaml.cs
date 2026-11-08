@@ -2450,7 +2450,10 @@ public partial class MainWindow : Window
     {
         if (_encoders.Count == 0) return "No encoders detected yet.";
         string found = $"{_encoders.Count} working encoder{(_encoders.Count == 1 ? "" : "s")} found.";
-        if (_encoders.Any(e => e.Def.Vendor != "cpu")) return found + " GPU encoders keep games running smoothly.";
+        if (_encoders.Any(e => e.Def.Vendor != "cpu"))
+            return _settings.EncoderId != "auto" && _encoders.FirstOrDefault(e => e.Def.Id == _settings.EncoderId)?.Def.Vendor == "cpu"
+                ? found + " ⚠ The CPU encoder is selected even though a GPU encoder works here: it's much heavier on games and can make clips choppy. Pick Auto or a GPU encoder."
+                : found + " GPU encoders keep games running smoothly.";
 
         // CPU only: say why, so it can be fixed (usually an outdated graphics driver)
         var gpus = GpuInfo.Adapters();
@@ -2535,6 +2538,7 @@ public partial class MainWindow : Window
         _settings.Fps = fps > 0 ? fps : 60;
         if (QualityCombo.SelectedItem is ComboBoxItem { Tag: QualityPreset q }) _settings.Quality = q;
         _settings.EncoderId = SelectedTag<string>(EncoderCombo) ?? "auto";
+        if (EncoderDesc != null) EncoderDesc.Text = EncoderDescription();
         _settings.CaptureCursor = CursorToggle.IsChecked == true;
         _settings.DesktopAudio = DesktopAudioToggle.IsChecked == true;
         _settings.SeparateAudioTracks = SeparateTracksToggle.IsChecked == true;

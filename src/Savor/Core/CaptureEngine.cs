@@ -340,8 +340,21 @@ public sealed class CaptureEngine : IDisposable
         }
         ChildProcesses.Track(p);
         try { p.PriorityClass = ProcessPriorityClass.High; } catch { try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { } }
-        GpuPriority = RaiseGpuPriority(p);
-        AddLog($"Capture GPU priority: {GpuPriority}");
+        // Windows only accepts a GPU priority once the process has opened the GPU (the screen capture does that
+        // a moment after start), so try a few times.
+        GpuPriority = "pending";
+        _ = Task.Run(async () =>
+        {
+            foreach (var wait in new[] { 1500, 2500, 4000, 8000 })
+            {
+                await Task.Delay(wait);
+                if (p.HasExited || !ReferenceEquals(_proc, p)) return;
+                var r = RaiseGpuPriority(p);
+                GpuPriority = r;
+                if (!r.StartsWith("normal")) break;
+            }
+            AddLog($"Capture GPU priority: {GpuPriority}");
+        });
         _audioOn = audio;
         if (audio && _audioQueue != null)
         {

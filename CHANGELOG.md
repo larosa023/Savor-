@@ -1,5 +1,9 @@
 # What's new in Savor
 
+## 0.9.10 · Nov 8, 2026
+- Fixed high GPU priority not taking effect on some PCs (Windows said "invalid parameter"): Savor now applies it once the capture engine is using the GPU, so screen capture keeps getting frames when a game maxes out the GPU.
+- Settings now warns when the CPU encoder is selected even though a GPU encoder works.
+
 ## 0.9.9 · Nov 8, 2026
 - Smoother clips in games that max out your GPU: Savor now gives its capture engine high GPU priority, so Windows doesn't push screen capture behind the game (like OBS does).
 - New: Restart as administrator (Settings → Capture → Capture priority) unlocks realtime GPU priority, the smoothest option for GPU-heavy games.
