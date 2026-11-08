@@ -2842,7 +2842,7 @@ public partial class MainWindow : Window
         Line($"Audio: desktop {(_settings.DesktopAudio ? "on" : "off")} · mic {(string.IsNullOrEmpty(_settings.MicDeviceId) ? "off" : "on")} · " +
              $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
              (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));
-        Line($"Capture GPU priority: {_engine.GpuPriority}{(_engine.GpuPriority != "realtime" ? " (run Savor as administrator for realtime)" : "")}");
+        Line($"Capture GPU priority: {_engine.GpuPriority}{(_engine.GpuPriority == "high" ? " (run Savor as administrator for realtime)" : "")}");
         Line($"Replay buffer: {(_engine.BufferActive ? "on" : "off")} ({_settings.ReplaySeconds} s) · recording {(_engine.Recording ? "yes" : "no")} · " +
              $"capture running {(_engine.IsRunning ? "yes" : "no")}");
         try

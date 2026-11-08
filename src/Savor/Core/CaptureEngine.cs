@@ -387,13 +387,14 @@ public sealed class CaptureEngine : IDisposable
 
     static string RaiseGpuPriority(Process p)
     {
+        int rt = -1, hi = -1;
         try
         {
-            if (D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 5 /* REALTIME */) == 0) return "realtime";
-            if (D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 4 /* HIGH */) == 0) return "high";
+            if ((rt = D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 5 /* REALTIME */)) == 0) return "realtime";
+            if ((hi = D3DKMTSetProcessSchedulingPriorityClass(p.Handle, 4 /* HIGH */)) == 0) return "high";
         }
-        catch { }
-        return "normal";
+        catch (Exception ex) { return "normal (" + ex.GetType().Name + ")"; }
+        return $"normal (Windows said 0x{rt:X8} / 0x{hi:X8})";
     }
 
     [System.Runtime.InteropServices.DllImport("gdi32.dll")]
