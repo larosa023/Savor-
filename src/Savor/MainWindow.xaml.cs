@@ -2682,7 +2682,7 @@ public partial class MainWindow : Window
 
             var beeps = new BeepSource();
             using var player = new NAudio.Wave.WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, 20);
-            player.Init(beeps);
+            player.Init(new NAudio.Wave.SampleProviders.SampleToWaveProvider(beeps));
             player.Play();
             await Task.Delay(500);
             for (int i = 0; i < 8; i++)
