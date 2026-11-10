@@ -82,6 +82,7 @@ public partial class MainWindow : Window
         {
             if (!_settings.DirectCaptureOff.Contains(id)) { _settings.DirectCaptureOff.Add(id); _settings.Save(); }
         });
+        _engine.FramesDropping += n => Dispatcher.BeginInvoke(() => OnFramesDropping(n));
         _engine.MemoryRestarted += mb => Dispatcher.BeginInvoke(() =>
             Notify("Capture restarted", $"Savor's capture engine was using {mb >> 20:N0} MB of memory, so it was restarted in compatibility mode " +
                    "(your replay buffer is kept). If this keeps happening, use Settings → About → Copy diagnostics and send it over.", error: true));
@@ -1948,6 +1949,34 @@ public partial class MainWindow : Window
         return $"audio pipe (two processes): pipe {connect}, audio sent {sent / 100.0:0.0} s, exit={cap.ExitCode}/{mux.ExitCode}, pieces={segs.Length}, {info}{(err.Length > 0 ? " | ffmpeg: " + err.Replace('\n', ' ')[..Math.Min(300, err.Length)] : "")}";
     }
 
+    /// <summary>CI only: the dropped-frame check on made-up captures: smooth, frozen ~0.3 s every 0.4 s (the old bug),
+    /// short game-style stalls, a still screen with a blinking cursor, and 30 fps video in a 60 fps capture.</summary>
+    static async Task<string> SelfTestFrameCheckAsync()
+    {
+        if (Ffmpeg.Path == null) return "frame check: no ffmpeg";
+        var dir = Path.Combine(AppSettings.LocalDataDir, "framecheck-test");
+        Directory.CreateDirectory(dir);
+        var cases = new (string name, string src, string vf)[]
+        {
+            ("smooth", "testsrc2=s=1280x720:r=60:d=4", "null"),
+            ("frozen 0.3s/0.4s", "testsrc2=s=1280x720:r=60:d=4", "select=lt(mod(n\\,25)\\,7),fps=60"),
+            ("game stalls", "testsrc2=s=1280x720:r=60:d=4", "select=lt(mod(n\\,40)\\,33),fps=60"),
+            ("still + cursor", "color=c=gray:s=1280x720:r=60:d=4", "drawbox=x=100:y=100:w=4:h=30:c=white:t=fill:enable=lt(mod(t\\,1)\\,0.5)"),
+            ("30fps video", "testsrc2=s=1280x720:r=30:d=4", "fps=60"),
+        };
+        var parts = new List<string>();
+        foreach (var (name, src, vf) in cases)
+        {
+            var f = Path.Combine(dir, "t.ts");
+            var (code, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", src,
+                "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-g", "120", "-bf", "0", "-f", "mpegts", f }, TimeSpan.FromSeconds(60));
+            var n = code == 0 ? await FrameCheck.FreezesInFileAsync(f, 1280L * 720) : null;
+            parts.Add($"{name}={(n?.ToString() ?? "error " + err.Trim().Split('\n')[0])}");
+        }
+        try { Directory.Delete(dir, true); } catch { }
+        return "frame check (freezes per 4 s): " + string.Join(", ", parts);
+    }
+
     /// <summary>CI only: runs the mic noise suppression graph on synthetic noise and compares levels.</summary>
     static async Task<string> SelfTestNoiseAsync()
     {
@@ -2107,6 +2136,8 @@ public partial class MainWindow : Window
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestAudioPipeAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio pipe: FAILED " + ex.Message + "\n"); }
+        try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "frame check: FAILED " + ex.Message + "\n"); }
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestNoiseAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "noise: FAILED " + ex.Message + "\n"); }
@@ -2436,6 +2467,7 @@ public partial class MainWindow : Window
 
             PopulateEncoderCombo();
             CursorToggle.IsChecked = _settings.CaptureCursor;
+            DropWarnToggle.IsChecked = _settings.WarnDroppedFrames;
 
             ReplaySlider.Value = _settings.ReplaySeconds;
             ReplayValue.Text = FormatShort(_settings.ReplaySeconds);
@@ -2577,6 +2609,28 @@ public partial class MainWindow : Window
             _captureDirty = true;
             if (SettingsPage.Visibility != Visibility.Visible) _ = ApplyCaptureChangesAsync();
         }
+    }
+
+    void DropWarn_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi) return;
+        _settings.WarnDroppedFrames = DropWarnToggle.IsChecked == true;
+        _settings.Save();
+    }
+
+    /// <summary>Capture keeps missing screen frames: say so now, with the most likely fix for this PC.</summary>
+    void OnFramesDropping(int freezes)
+    {
+        if (!_settings.WarnDroppedFrames) return;
+        string why = _engine.GpuPriority switch
+        {
+            "realtime" => "If a game is using all of your GPU, cap its frame rate a little below what it normally reaches.",
+            _ when !IsElevated => "Restart Savor as administrator (Settings → Capture priority) so capture keeps up when a game maxes out your GPU, or cap the game's frame rate a little lower.",
+            _ => "Cap the game's frame rate a little below what it normally reaches, so capture gets a share of the GPU.",
+        };
+        ToastWindow.Notify("Clips may look choppy",
+               $"Capture missed screen frames {freezes} times in the last 30 seconds. {why} If it keeps happening, use Settings → About → Copy diagnostics and send it over.",
+               error: true, actionText: "Settings", action: () => { ShowFromTray(); if (SettingsPage.Visibility != Visibility.Visible) Settings_Click(this, new RoutedEventArgs()); });
     }
 
     async void Capture_Changed(object sender, RoutedEventArgs e)
@@ -2912,6 +2966,7 @@ public partial class MainWindow : Window
         Line($"Audio: desktop {(_settings.DesktopAudio ? "on" : "off")} · mic {(string.IsNullOrEmpty(_settings.MicDeviceId) ? "off" : "on")} · " +
              $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
              (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));
+        Line($"Dropped frames: {_engine.RecentFreezes} short freeze(s) in the last 30 s (warning at {CaptureEngine.FreezeWarnThreshold}, warnings {(_settings.WarnDroppedFrames ? "on" : "off")})");
         Line($"Capture GPU priority: {_engine.GpuPriority}{(_engine.GpuPriority == "high" ? " (run Savor as administrator for realtime)" : "")}");
         Line($"Replay buffer: {(_engine.BufferActive ? "on" : "off")} ({_settings.ReplaySeconds} s) · recording {(_engine.Recording ? "yes" : "no")} · " +
              $"capture running {(_engine.IsRunning ? "yes" : "no")}");

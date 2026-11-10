@@ -782,6 +782,14 @@
                                         <TextBlock Text="Capture mouse cursor" Style="{StaticResource RowTitle}"/>
                                     </StackPanel>
                                 </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <CheckBox x:Name="DropWarnToggle" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="DropWarn_Changed"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Warn about dropped frames" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock x:Name="DropWarnText" Text="Savor checks each part of the replay buffer as it's written and tells you if capture starts missing frames, before you save a choppy clip." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
                             </StackPanel>
                         </Border>
 

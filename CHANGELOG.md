@@ -1,5 +1,9 @@
 # What's new in Savor
 
+## 0.9.13 · Nov 10, 2026
+- New: dropped-frame warning. Savor checks each part of the replay buffer as it's written (by frame sizes only, so it costs almost nothing) and notifies you if capture keeps missing screen frames, with the most likely fix for your PC, so you find out before saving a choppy clip. Turn it off in Settings → Capture → Warn about dropped frames.
+- Copy diagnostics now includes how many short freezes capture had in the last 30 seconds.
+
 ## 0.9.12 · Nov 8, 2026
 - Fixed choppy clips (freezing for a split second every half second), even with no game running. Since the audio sync fix, FFmpeg kept pausing the screen capture to wait for the audio and dropped screen frames. Screen capture now runs in its own process that nothing can pause, and Savor passes its video on to be combined with the audio, so every frame is kept. Audio sync works exactly as before.
 - Any previous "Check audio sync" result is reset, since it was measured with the old timing. Run it again if sound ever seems off.

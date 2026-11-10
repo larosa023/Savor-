@@ -433,6 +433,10 @@ public sealed class CaptureEngine : IDisposable
         _capProc = cap;
         _proc = p;
         StartedUtc = DateTime.UtcNow;
+        var size = Ffmpeg.OutputSize(Display, s.OutputHeight);
+        _outPixels = size is { } o ? (long)o.W * o.H : (Display is { } dd ? (long)dd.Width * dd.Height : 1920L * 1080);
+        lock (_freezeLog) _freezeLog.Clear();
+        _checkedSeg = -1;
     }
 
     /// <summary>
@@ -923,6 +927,60 @@ public sealed class CaptureEngine : IDisposable
         return list;
     }
 
+    // ---- dropped-frame check: each finished piece is looked at once (frame sizes only, no decoding) ----
+    readonly Queue<(DateTime when, int freezes)> _freezeLog = new();
+    int _checkedSeg = -1;
+    int _checking;
+    long _outPixels = 1920L * 1080;
+
+    /// <summary>Short freezes (dropped screen frames) found in the last 30 s of capture.</summary>
+    public int RecentFreezes
+    {
+        get { lock (_freezeLog) { Trim(); return _freezeLog.Sum(f => f.freezes); } }
+    }
+
+    /// <summary>Raised (at most every 30 minutes) when capture keeps dropping frames; the argument is freezes in the last 30 s.</summary>
+    public event Action<int>? FramesDropping;
+    DateTime _lastDropWarning = DateTime.MinValue;
+    public const int FreezeWarnThreshold = 10;
+
+    void Trim()
+    {
+        while (_freezeLog.Count > 0 && DateTime.UtcNow - _freezeLog.Peek().when > TimeSpan.FromSeconds(30)) _freezeLog.Dequeue();
+    }
+
+    void CheckFrames(List<Segment> segs)
+    {
+        if (segs.Count < 2 || Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
+        var seg = segs[^2]; // the newest finished piece (the last one is still being written)
+        if (seg.Index <= _checkedSeg || (DateTime.UtcNow - StartedUtc).TotalSeconds < 6) { _checking = 0; return; }
+        _checkedSeg = seg.Index;
+        long px = _outPixels;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var n = await FrameCheck.FreezesInFileAsync(seg.Path, px);
+                if (n is not { } f) return;
+                int recent;
+                lock (_freezeLog)
+                {
+                    _freezeLog.Enqueue((DateTime.UtcNow, f));
+                    Trim();
+                    recent = _freezeLog.Sum(x => x.freezes);
+                }
+                if (f > 0) AddLog($"Dropped frames: {f} short freeze(s) in the last piece, {recent} in the last 30 s");
+                if (recent >= FreezeWarnThreshold && DateTime.UtcNow - _lastDropWarning > TimeSpan.FromMinutes(30))
+                {
+                    _lastDropWarning = DateTime.UtcNow;
+                    FramesDropping?.Invoke(recent);
+                }
+            }
+            catch { }
+            finally { _checking = 0; }
+        });
+    }
+
     void Cleanup()
     {
         try
@@ -930,6 +988,7 @@ public sealed class CaptureEngine : IDisposable
             if (!IsRunning) return;
             var segs = Segments();
             Watchdog(segs);
+            CheckFrames(segs);
             if (segs.Count == 0) return;
             int newest = segs[^1].Index;
             int need = (int)Math.Ceiling(_settings().ReplaySeconds / (double)SegmentSeconds) + 3;

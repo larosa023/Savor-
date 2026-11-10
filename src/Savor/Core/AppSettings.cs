@@ -144,6 +144,8 @@ public sealed class AppSettings
     public QualityPreset Quality { get; set; } = QualityPreset.High;
     public string EncoderId { get; set; } = "auto";
     public bool CaptureCursor { get; set; } = true;
+    /// <summary>Notify when the capture keeps dropping frames (clips would look choppy).</summary>
+    public bool WarnDroppedFrames { get; set; } = true;
 
     public int ReplaySeconds { get; set; } = 60;
     public bool StartBufferOnLaunch { get; set; } = true;
