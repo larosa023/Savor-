@@ -1,5 +1,9 @@
 # What's new in Savor
 
+## 0.9.14 · Nov 20, 2026
+- New: screenshot hotkey (Alt + F6, change it in Settings → Hotkeys). Saves a full-quality PNG of the captured display to Captures, named after the game, with the replay buffer on or off. Screenshots show in Captures with a SHOT badge, open in your photo viewer, and work with search, game filters, rename, copy and delete.
+- New: Storage on the Captures page. See how much space your captures use per game, and clean up captures older than 7–180 days in one click (to the Recycle Bin). Anything you renamed, edited or merged is always kept.
+
 ## 0.9.13 · Nov 10, 2026
 - New: dropped-frame warning. Savor checks each part of the replay buffer as it's written (by frame sizes only, so it costs almost nothing) and notifies you if capture keeps missing screen frames, with the most likely fix for your PC, so you find out before saving a choppy clip. Turn it off in Settings → Capture → Warn about dropped frames.
 - Copy diagnostics now includes how many short freezes capture had in the last 30 seconds.

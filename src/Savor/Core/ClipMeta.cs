@@ -15,7 +15,7 @@ namespace Savor.Core;
 /// </summary>
 public sealed record ClipMeta(string Kind, string? Game)
 {
-    public const string Clip = "clip", Recording = "recording";
+    public const string Clip = "clip", Recording = "recording", Screenshot = "screenshot";
     const string Stream = ":savor";
 
     // "<anything> 2026-10-30 21.14.05" (optionally " (2)") — the timestamp Savor puts in every name
@@ -69,7 +69,7 @@ public sealed record ClipMeta(string Kind, string? Game)
                         foreach (var part in line[8..].Split(',', StringSplitOptions.RemoveEmptyEntries))
                             if (double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out var m) && m >= 0) markers.Add(m);
                 }
-                return new ClipMeta(kind == Recording ? Recording : Clip, string.IsNullOrWhiteSpace(game) ? null : game)
+                return new ClipMeta(kind is Recording or Screenshot ? kind : Clip, string.IsNullOrWhiteSpace(game) ? null : game)
                     { Markers = markers.OrderBy(m => m).ToArray() };
             }
         }
@@ -85,6 +85,7 @@ public sealed record ClipMeta(string Kind, string? Game)
         if (!m.Success) return null;
         var pre = m.Groups["pre"].Value.Trim();
         if (pre.Length == 0 || pre.Equals("Clip", StringComparison.OrdinalIgnoreCase)) return new ClipMeta(Clip, null);
+        if (pre.Equals("Screenshot", StringComparison.OrdinalIgnoreCase)) return new ClipMeta(Screenshot, null);
         if (pre.EndsWith(" Recording", StringComparison.OrdinalIgnoreCase))
             return new ClipMeta(Recording, pre[..^" Recording".Length].Trim());
         return new ClipMeta(Clip, pre);

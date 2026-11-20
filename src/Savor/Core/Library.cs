@@ -24,7 +24,9 @@ public sealed class ClipItem : INotifyPropertyChanged
     public ClipMeta? Info { get; init; }
 
     public string Name => Path.GetFileNameWithoutExtension(FilePath);
-    public string Kind => IsRecording ? "REC" : "CLIP";
+    public string Kind => IsScreenshot ? "SHOT" : IsRecording ? "REC" : "CLIP";
+    /// <summary>A still picture (screenshot hotkey) rather than a video.</summary>
+    public bool IsScreenshot => Library.IsImage(FilePath);
     public bool IsRecording => Info?.IsRecording ?? Name.StartsWith("Recording", StringComparison.OrdinalIgnoreCase);
     /// <summary>The game it was captured in, if Savor knows.</summary>
     public string? Game => Info?.Game;
@@ -70,6 +72,8 @@ public static class Library
     // capture info is tiny but read per file; cache it by path + write time
     static readonly Dictionary<string, (long ticks, ClipMeta? meta)> MetaCache = new(StringComparer.OrdinalIgnoreCase);
 
+    public static bool IsImage(string path) => path.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+
     public static List<ClipItem> Scan(string folder, int max = 2000)
     {
         try
@@ -78,7 +82,7 @@ public static class Library
             var files = new DirectoryInfo(folder)
                 .EnumerateFiles()
                 .Where(f => (f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
-                             f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase)) &&
+                             f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase) || IsImage(f.Name)) &&
                             !f.Name.StartsWith(".savor-", StringComparison.Ordinal)) // exports / joins still being written
                 .OrderByDescending(f => f.LastWriteTime)
                 .Take(max)
@@ -90,6 +94,7 @@ public static class Library
                     long ticks = f.LastWriteTimeUtc.Ticks;
                     if (!MetaCache.TryGetValue(f.FullName, out var c) || c.ticks != ticks)
                         MetaCache[f.FullName] = c = (ticks, ClipMeta.Read(f.FullName));
+                    if (c.meta == null && IsImage(f.Name)) continue; // only Savor's own screenshots, not any picture in the folder
                     list.Add(new ClipItem { FilePath = f.FullName, Created = f.LastWriteTime, Size = f.Length, Info = c.meta });
                 }
             return list;
@@ -228,7 +233,7 @@ public static class Library
             {
                 Directory.CreateDirectory(ThumbDir);
                 string err = "";
-                foreach (var seek in new[] { "1", "0" })
+                foreach (var seek in IsImage(item.FilePath) ? new[] { "0" } : new[] { "1", "0" })
                 {
                     (_, err) = await Ffmpeg.RunAsync(new[]
                     {
@@ -275,6 +280,7 @@ public static class Library
     /// </summary>
     public static async Task<BitmapSource[]?> LoadPreviewFramesAsync(ClipItem item, CancellationToken ct)
     {
+        if (item.IsScreenshot) return null; // nothing to animate
         string key;
         try { key = ThumbKey(new FileInfo(item.FilePath)); } catch { return null; }
         var sprite = Path.Combine(ThumbDir, key + "_p.jpg");

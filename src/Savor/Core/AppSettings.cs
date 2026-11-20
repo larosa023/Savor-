@@ -146,6 +146,8 @@ public sealed class AppSettings
     public bool CaptureCursor { get; set; } = true;
     /// <summary>Notify when the capture keeps dropping frames (clips would look choppy).</summary>
     public bool WarnDroppedFrames { get; set; } = true;
+    /// <summary>Captures → Storage → Clean up: captures older than this many days.</summary>
+    public int CleanupDays { get; set; } = 30;
 
     public int ReplaySeconds { get; set; } = 60;
     public bool StartBufferOnLaunch { get; set; } = true;
@@ -171,6 +173,7 @@ public sealed class AppSettings
     public HotkeyBinding BufferHotkey { get; set; } = new(ModifierKeys.Alt, Key.F8);
     /// <summary>Drops a marker at the current moment (shown on the editor's timeline).</summary>
     public HotkeyBinding MarkerHotkey { get; set; } = new(ModifierKeys.Alt, Key.F7);
+    public HotkeyBinding ScreenshotHotkey { get; set; } = new(ModifierKeys.Alt, Key.F6);
 
     public bool CloseToTray { get; set; } = true;
     public bool ShowNotifications { get; set; } = true;
@@ -239,6 +242,7 @@ public sealed class AppSettings
         RecordHotkey ??= new();
         BufferHotkey ??= new();
         MarkerHotkey ??= new();
+        ScreenshotHotkey ??= new();
         return this;
     }
 }

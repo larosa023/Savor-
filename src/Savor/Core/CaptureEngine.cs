@@ -163,6 +163,55 @@ public sealed class CaptureEngine : IDisposable
     }
 
     /// <summary>Saves the last N seconds. Returns the output path, or null if nothing to save.</summary>
+    /// <summary>
+    /// Saves a full-quality PNG of the captured display (same display and capture method as clips), named after the
+    /// game in front. Works whether or not the replay buffer is on. Returns the file, or null if it couldn't be taken.
+    /// </summary>
+    public async Task<string?> TakeScreenshotAsync()
+    {
+        var s = _settings();
+        var d = Display;
+        var game = ClipMeta.CleanGame(s.GameName(ForegroundApp.CurrentName()));
+        Directory.CreateDirectory(s.OutputFolder);
+        var stamp = DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss");
+        var kind = ClipMeta.SafeFileName(game ?? "Screenshot");
+        if (kind.Length == 0) kind = "Screenshot";
+        var output = Path.Combine(s.OutputFolder, $"{kind} {stamp}.png");
+        for (int n = 2; File.Exists(output); n++) output = Path.Combine(s.OutputFolder, $"{kind} {stamp} ({n}).png");
+        var tmp = Path.Combine(s.OutputFolder, $".savor-shot-{Guid.NewGuid():N}.png");
+
+        string cursor = s.CaptureCursor ? "1" : "0";
+        var tries = new List<string[]>();
+        if (Encoder?.Pipeline != CapturePipeline.Gdi)
+        {
+            string src = UseGraphicsCapture && d != null && MonitorHandle(d) is { } hmon && hmon != 0
+                ? $"gfxcapture=hmonitor={hmon}:max_framerate=30:capture_cursor={cursor}"
+                : $"ddagrab=output_idx={d?.OutputIndex ?? 0}:framerate=30:draw_mouse={cursor}";
+            tries.Add(new[] { "-f", "lavfi", "-i", src + ",hwdownload,format=bgra" });
+        }
+        var gdi = new List<string> { "-f", "gdigrab", "-framerate", "30", "-draw_mouse", cursor };
+        if (d != null) gdi.AddRange(new[] { "-offset_x", d.X.ToString(), "-offset_y", d.Y.ToString(), "-video_size", $"{d.Width}x{d.Height}" });
+        gdi.AddRange(new[] { "-i", "desktop" });
+        tries.Add(gdi.ToArray());
+
+        foreach (var input in tries)
+        {
+            var args = new List<string> { "-hide_banner", "-nostdin", "-loglevel", "error", "-y" };
+            args.AddRange(input);
+            args.AddRange(new[] { "-frames:v", "1", "-update", "1", "-compression_level", "3", "-f", "image2", tmp });
+            var (code, err) = await Ffmpeg.RunAsync(args, TimeSpan.FromSeconds(10));
+            if (code == 0 && File.Exists(tmp) && new FileInfo(tmp).Length > 0)
+            {
+                File.Move(tmp, output);
+                new ClipMeta(ClipMeta.Screenshot, game).Write(output);
+                return output;
+            }
+            AddLog("Screenshot attempt failed: " + err.Trim().Split('\n').LastOrDefault());
+            try { File.Delete(tmp); } catch { }
+        }
+        return null;
+    }
+
     public async Task<string?> SaveReplayAsync()
     {
         await _op.WaitAsync();

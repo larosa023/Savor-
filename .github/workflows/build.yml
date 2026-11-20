@@ -148,7 +148,20 @@ jobs:
           $p = Start-Process publish/Savor.exe -PassThru
           Start-Sleep 40
           [System.Windows.Forms.SendKeys]::SendWait("%{F7}")   # marker hotkey, from the tray
-          Start-Sleep 15
+          Start-Sleep 3
+          [System.Windows.Forms.SendKeys]::SendWait("%{F6}")   # screenshot hotkey
+          Start-Sleep 12
+          $shots = Get-ChildItem "$env:USERPROFILE\Videos\Savor" -Filter "*.png" -ErrorAction SilentlyContinue
+          if ($shots) {
+            foreach ($sh in $shots) {
+              Add-Type -AssemblyName System.Drawing
+              $im = [System.Drawing.Image]::FromFile($sh.FullName)
+              $smeta = Get-Content -LiteralPath $sh.FullName -Stream savor -ErrorAction SilentlyContinue
+              $l = "SCREENSHOT OK: $($sh.Name) $([math]::Round($sh.Length/1KB)) KB, $($im.Width)x$($im.Height), info [$($smeta -join '; ')]"
+              $im.Dispose()
+              Write-Host "::notice::$l"; $l | Out-File diag.txt -Append
+            }
+          } else { Write-Host "::warning::SCREENSHOT MISSING"; "SCREENSHOT MISSING" | Out-File diag.txt -Append }
           $p.Refresh()
           $pws = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
           $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"

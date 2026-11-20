@@ -367,6 +367,34 @@ public partial class MainWindow : Window
         else Notify("Nothing to mark", "Turn on the replay buffer or start recording first.", error: true);
     }
 
+    // ===================== screenshots =====================
+
+    bool _shooting;
+
+    async Task TakeScreenshotAsync()
+    {
+        if (_shooting) return; // one at a time (key repeat)
+        _shooting = true;
+        try
+        {
+            var path = await _engine.TakeScreenshotAsync();
+            if (path == null)
+            {
+                Notify("Screenshot failed", "Savor couldn't grab the screen. Check Settings → Capture → Display.", error: true);
+                return;
+            }
+            SelfLog("screenshot " + Path.GetFileName(path));
+            if (_settings.PlaySaveSound) Chime.Play(_settings.SaveSoundVolume);
+            ReloadClips();
+            if (_settings.ShowNotifications)
+                ToastWindow.Notify("Screenshot saved", Path.GetFileName(path),
+                    onClick: () => Reveal(path), actionText: "Open", action: () => OpenFile(path), skipIsle: true);
+            _ = EnforceStorageAsync(path);
+        }
+        catch (Exception ex) { LogError("Screenshot", ex); Notify("Screenshot failed", ex.Message, error: true); }
+        finally { _shooting = false; }
+    }
+
     static string FormatElapsed(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
     // ===================== storage =====================
@@ -1169,6 +1197,7 @@ public partial class MainWindow : Window
         if (seq != _scanSeq) return; // a newer scan is on its way
         _all = list;
         RefreshClips(rescan: false);
+        if (StoragePanel.Visibility == Visibility.Visible) _ = RefreshStorageAsync();
     }
 
     void RefreshClips(bool rescan)
@@ -1211,6 +1240,150 @@ public partial class MainWindow : Window
         EmptyTitle.Text = searching ? "No matches" : "Nothing captured yet";
         EmptyHint.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
         ClipCount.Text = all.Count == 0 ? "" : all.Count.ToString();
+    }
+
+    // ----- storage overview and clean-up -----
+
+    List<ClipItem> _storageScan = new();
+    DispatcherTimer? _cleanupConfirm;
+    static readonly int[] CleanupAges = { 7, 14, 30, 60, 90, 180 };
+
+    void StorageToggle_Click(object sender, RoutedEventArgs e)
+    {
+        bool show = StoragePanel.Visibility != Visibility.Visible;
+        StoragePanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show) _ = RefreshStorageAsync();
+    }
+
+    async Task RefreshStorageAsync()
+    {
+        if (CleanupAgeCombo.Items.Count == 0)
+        {
+            _loadingUi = true;
+            foreach (var d in CleanupAges)
+                CleanupAgeCombo.Items.Add(new ComboBoxItem { Content = $"Older than {d} days", Tag = d });
+            if (!SelectByTag(CleanupAgeCombo, _settings.CleanupDays)) SelectByTag(CleanupAgeCombo, 30);
+            _loadingUi = false;
+        }
+        var folder = _settings.OutputFolder;
+        var (list, free) = await Task.Run(() => (Library.Scan(folder, int.MaxValue), Storage.FreeBytes(folder)));
+        _storageScan = list;
+        long total = list.Sum(c => c.Size);
+        StorageSummary.Text = list.Count == 0
+            ? "No captures yet."
+            : $"{list.Count} capture{(list.Count == 1 ? "" : "s")} use {Storage.Gb(total)}" +
+              (free != long.MaxValue ? $"  ·  {Storage.Gb(free)} free on this drive" : "") +
+              (_settings.StorageLimitGb > 0 ? $"  ·  limit {_settings.StorageLimitGb} GB" : "");
+
+        // biggest games first; the rest folded into one row
+        StorageGames.Children.Clear();
+        var groups = list.GroupBy(c => c.Game ?? "No game", StringComparer.OrdinalIgnoreCase)
+                         .Select(g => (Name: g.First().Game ?? "No game", Size: g.Sum(c => c.Size), Count: g.Count()))
+                         .OrderByDescending(g => g.Size).ToList();
+        if (groups.Count > 7)
+            groups = groups.Take(6).Append(("Everything else", groups.Skip(6).Sum(g => g.Size), groups.Skip(6).Sum(g => g.Count))).ToList();
+        long biggest = Math.Max(1, groups.Count > 0 ? groups.Max(g => g.Size) : 1);
+        foreach (var g in groups)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 7) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            var name = new TextBlock { Text = g.Name, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, FontSize = 12.5 };
+            var track = new Border { Height = 6, CornerRadius = new CornerRadius(3), Background = (Brush)FindResource("Surface3Brush"), VerticalAlignment = VerticalAlignment.Center };
+            var fill = new Border { Height = 6, CornerRadius = new CornerRadius(3), Background = (Brush)FindResource("AccentBrush"), HorizontalAlignment = HorizontalAlignment.Left };
+            var inner = new Grid();
+            double frac = Math.Max(0.01, g.Size / (double)biggest);
+            inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(frac, GridUnitType.Star) });
+            inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1 - frac + 1e-6, GridUnitType.Star) });
+            fill.HorizontalAlignment = HorizontalAlignment.Stretch;
+            inner.Children.Add(fill);
+            track.Child = inner;
+            var size = new TextBlock { Text = $"{Storage.Gb(g.Size)}  ·  {g.Count}", HorizontalAlignment = HorizontalAlignment.Right,
+                                       VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Foreground = (Brush)FindResource("MutedBrush") };
+            Grid.SetColumn(track, 1);
+            Grid.SetColumn(size, 2);
+            row.Children.Add(name);
+            row.Children.Add(track);
+            row.Children.Add(size);
+            StorageGames.Children.Add(row);
+        }
+        UpdateCleanupDesc();
+    }
+
+    /// <summary>Old captures with Savor's own name. Anything renamed, edited or merged is kept (its name no longer
+    /// ends in Savor's timestamp), so clips worth keeping are never swept up.</summary>
+    List<ClipItem> CleanupCandidates()
+    {
+        int days = _settings.CleanupDays;
+        var cutoff = DateTime.Now.AddDays(-days);
+        return _storageScan.Where(c => c.Info != null && c.Created < cutoff && ClipMeta.StampedPrefix(c.Name) != null).ToList();
+    }
+
+    void UpdateCleanupDesc()
+    {
+        ResetCleanupConfirm();
+        var c = CleanupCandidates();
+        long size = c.Sum(x => x.Size);
+        CleanupDesc.Text = c.Count == 0
+            ? "Nothing that old to clean up. Captures you renamed, edited or merged are always kept."
+            : $"Moves {c.Count} capture{(c.Count == 1 ? "" : "s")} ({Storage.Gb(size)}) to the Recycle Bin. Captures you renamed, edited or merged are kept.";
+        CleanupButton.IsEnabled = c.Count > 0;
+    }
+
+    void CleanupAge_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi) return;
+        _settings.CleanupDays = SelectedTag<int>(CleanupAgeCombo) is > 0 and var d ? d : 30;
+        _settings.Save();
+        UpdateCleanupDesc();
+    }
+
+    void ResetCleanupConfirm()
+    {
+        _cleanupConfirm?.Stop();
+        CleanupButtonText.Text = "Clean up";
+    }
+
+    async void Cleanup_Click(object sender, RoutedEventArgs e)
+    {
+        var files = CleanupCandidates();
+        if (files.Count == 0) return;
+        if (_cleanupConfirm is not { IsEnabled: true })
+        {
+            // second click confirms (nothing is removed by a stray click)
+            CleanupButtonText.Text = $"Remove {files.Count}?";
+            _cleanupConfirm ??= new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Normal, (_, _) => ResetCleanupConfirm(), Dispatcher);
+            _cleanupConfirm.Start();
+            return;
+        }
+        ResetCleanupConfirm();
+        CleanupButton.IsEnabled = false;
+        StopHover();
+        var paths = files.Select(f => f.FilePath).ToList();
+        var (done, freed) = await Task.Run(() =>
+        {
+            int n = 0;
+            long bytes = 0;
+            foreach (var f in paths)
+            {
+                try
+                {
+                    long len = new FileInfo(f).Length;
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(f,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    n++;
+                    bytes += len;
+                }
+                catch { } // in use: skip it
+            }
+            return (n, bytes);
+        });
+        ClearSelection();
+        ReloadClips();
+        await RefreshStorageAsync();
+        Notify("Cleaned up", $"Moved {done} capture{(done == 1 ? "" : "s")} ({Storage.Gb(freed)}) to the Recycle Bin. Empty it to free the space.");
     }
 
     // ----- search -----
@@ -1258,7 +1431,7 @@ public partial class MainWindow : Window
         if (_joining) return;
         SelectionBar.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
         SelectionText.Text = n == 1 ? "1 selected" : $"{n} selected";
-        SelJoinButton.IsEnabled = n >= 2;
+        SelJoinButton.IsEnabled = n >= 2 && !_selected.Any(Library.IsImage);
         if (n == 0) SelGameBox.Visibility = Visibility.Collapsed;
     }
 
@@ -1743,6 +1916,7 @@ public partial class MainWindow : Window
 
     public void OpenEditor(string path)
     {
+        if (Library.IsImage(path)) { OpenFile(path); return; } // screenshots open in the Photos app
         try { OpenEditorCore(path); }
         catch (Exception ex)
         {
@@ -2136,6 +2310,13 @@ public partial class MainWindow : Window
 
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestAudioPipeAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "audio pipe: FAILED " + ex.Message + "\n"); }
+        {
+            // clean-up must only sweep captures still carrying Savor's own name
+            var names = new[] { "Call of Duty 2026-11-08 15.11.57", "Clip 2026-11-08 15.11.57 (2)", "Screenshot 2026-11-20 12.30.05",
+                                "Recording 2026-11-08 15.11.57", "Call of Duty 2026-11-08 15.11.57 (edit)", "Call of Duty 2026-11-08 15.11.57 (merged)", "My best clip" };
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                "cleanup sweeps: " + string.Join(", ", names.Select(n => $"[{n}]={(ClipMeta.StampedPrefix(n) != null ? "yes" : "kept")}")) + "\n");
+        }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "frame check: FAILED " + ex.Message + "\n"); }
 
@@ -2297,9 +2478,10 @@ public partial class MainWindow : Window
         _hotkeys.Register(_settings.RecordHotkey, () => _ = ToggleRecordAsync());
         _hotkeys.Register(_settings.BufferHotkey, () => _ = ToggleBufferAsync());
         _hotkeys.Register(_settings.MarkerHotkey, AddMarker);
+        _hotkeys.Register(_settings.ScreenshotHotkey, () => _ = TakeScreenshotAsync());
 
         // flag the same shortcut used for two actions
-        var all = new[] { _settings.SaveClipHotkey, _settings.RecordHotkey, _settings.BufferHotkey, _settings.MarkerHotkey }
+        var all = new[] { _settings.SaveClipHotkey, _settings.RecordHotkey, _settings.BufferHotkey, _settings.MarkerHotkey, _settings.ScreenshotHotkey }
             .Where(h => !h.IsEmpty).Select(h => h.ToString()).ToList();
         var dupes = all.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         HotkeyNote.Text = dupes.Count == 0 ? HotkeyHelp : $"{string.Join(", ", dupes)} is set for more than one action — it will trigger both.";
@@ -2311,6 +2493,7 @@ public partial class MainWindow : Window
         "save" => _settings.SaveClipHotkey,
         "record" => _settings.RecordHotkey,
         "marker" => _settings.MarkerHotkey,
+        "shot" => _settings.ScreenshotHotkey,
         _ => _settings.BufferHotkey
     };
 
@@ -2321,6 +2504,7 @@ public partial class MainWindow : Window
             case "save": _settings.SaveClipHotkey = hk; break;
             case "record": _settings.RecordHotkey = hk; break;
             case "marker": _settings.MarkerHotkey = hk; break;
+            case "shot": _settings.ScreenshotHotkey = hk; break;
             default: _settings.BufferHotkey = hk; break;
         }
     }
@@ -2401,7 +2585,7 @@ public partial class MainWindow : Window
     void HotkeyClear_Click(object sender, RoutedEventArgs e)
     {
         var tag = (string)((Button)sender).Tag;
-        var target = tag switch { "save" => SaveClipHotkeyButton, "record" => RecordHotkeyButton, "marker" => MarkerHotkeyButton, _ => BufferHotkeyButton };
+        var target = tag switch { "save" => SaveClipHotkeyButton, "record" => RecordHotkeyButton, "marker" => MarkerHotkeyButton, "shot" => ScreenshotHotkeyButton, _ => BufferHotkeyButton };
         if (_capturingHotkey != null) EndHotkeyCapture();
         SetBinding(target, new HotkeyBinding());
         _settings.Save();
@@ -2497,6 +2681,7 @@ public partial class MainWindow : Window
             RecordHotkeyButton.Content = _settings.RecordHotkey.ToString();
             BufferHotkeyButton.Content = _settings.BufferHotkey.ToString();
             MarkerHotkeyButton.Content = _settings.MarkerHotkey.ToString();
+            ScreenshotHotkeyButton.Content = _settings.ScreenshotHotkey.ToString();
 
             StartupToggle.IsChecked = StartupManager.IsEnabled;
             TrayToggle.IsChecked = _settings.CloseToTray;

@@ -13,8 +13,11 @@ public static class Storage
     /// <summary>Only files Savor made (clips, recordings and their edits) are ever touched.</summary>
     static bool IsSavorCapture(FileInfo f) =>
         (f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
-         f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase)) &&
+         f.Extension.Equals(".mkv", StringComparison.OrdinalIgnoreCase) ||
+         f.Extension.Equals(".png", StringComparison.OrdinalIgnoreCase)) &&
+        !f.Name.StartsWith(".savor-", StringComparison.Ordinal) &&
         (f.Name.StartsWith("Clip ", StringComparison.OrdinalIgnoreCase) ||
+         f.Name.StartsWith("Screenshot ", StringComparison.OrdinalIgnoreCase) ||
          f.Name.StartsWith("Recording ", StringComparison.OrdinalIgnoreCase) ||
          ClipMeta.Read(f.FullName) != null); // game-named or renamed captures carry Savor's info stream
 

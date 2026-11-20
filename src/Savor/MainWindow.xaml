@@ -609,6 +609,13 @@
                             <TextBlock Text="Open folder"/>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="StorageButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Margin="0,0,6,0"
+                            Click="StorageToggle_Click" ToolTip="How much space your captures use, and clean-up">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xEDA2;" FontSize="13" Margin="0,0,8,0"/>
+                            <TextBlock Text="Storage"/>
+                        </StackPanel>
+                    </Button>
                     <!-- search by name or game -->
                     <Grid DockPanel.Dock="Right" Width="230" Margin="0,0,10,0" VerticalAlignment="Center">
                         <TextBox x:Name="SearchBox" TextChanged="Search_Changed" PreviewKeyDown="Search_KeyDown" Padding="0"/>
@@ -621,7 +628,29 @@
                                FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <!-- one chip per game, shown once captures have games -->
-                <WrapPanel x:Name="GameFilters" Grid.Row="1" Margin="0,-4,0,10" Visibility="Collapsed"/>
+                <StackPanel Grid.Row="1">
+                    <!-- storage overview: space per game, and clean-up of old captures -->
+                    <Border x:Name="StoragePanel" Style="{StaticResource Card}" Margin="0,-4,0,14" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="StorageSummary" FontWeight="SemiBold" Text="Counting…"/>
+                            <StackPanel x:Name="StorageGames" Margin="0,12,0,0"/>
+                            <Border Style="{StaticResource Divider}"/>
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ComboBox x:Name="CleanupAgeCombo" SelectionChanged="CleanupAge_Changed" Margin="0,0,8,0"/>
+                                    <Button x:Name="CleanupButton" Style="{StaticResource GhostButton}" Click="Cleanup_Click">
+                                        <TextBlock x:Name="CleanupButtonText" Text="Clean up"/>
+                                    </Button>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="Clean up old captures" Style="{StaticResource RowTitle}"/>
+                                    <TextBlock x:Name="CleanupDesc" Style="{StaticResource RowDesc}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                    <WrapPanel x:Name="GameFilters" Margin="0,-4,0,10" Visibility="Collapsed"/>
+                </StackPanel>
                 <Grid Grid.Row="2">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,-10,0">
                         <ItemsControl x:Name="ClipList" ItemTemplate="{StaticResource ClipTemplate}" Margin="0,0,0,10">
@@ -993,6 +1022,21 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Text="Add a marker" Style="{StaticResource RowTitle}"/>
                                         <TextBlock Text="Marks the moment in your recording or replay buffer; markers show on the editor's timeline." Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Divider}"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource GhostButton}" Padding="9,6" Margin="0,0,6,0" Tag="shot"
+                                                Click="HotkeyClear_Click" ToolTip="Remove this shortcut">
+                                            <TextBlock Style="{StaticResource Icon}" Text="&#xE711;" FontSize="11"/>
+                                        </Button>
+                                        <Button x:Name="ScreenshotHotkeyButton" Style="{StaticResource HotkeyButton}"
+                                            Tag="shot" Click="Hotkey_Click" PreviewKeyDown="Hotkey_KeyDown" PreviewKeyUp="Hotkey_KeyUp" PreviewMouseDown="Hotkey_MouseDown" LostFocus="Hotkey_LostFocus"/>
+                                    </StackPanel>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Take a screenshot" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="Saves a full-quality PNG of the captured display to Captures, named after the game. Works with the replay buffer on or off." Style="{StaticResource RowDesc}"/>
                                     </StackPanel>
                                 </DockPanel>
                                 <TextBlock x:Name="HotkeyNote" Style="{StaticResource RowDesc}" Margin="0,14,0,0"
