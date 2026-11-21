@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.18 · Nov 21, 2026
+- Smoother scrolling: the mouse wheel now glides instead of jumping, in Settings, Captures, the Studio side panel, What's new and the editor's side panel. Each notch also scrolls a bit further.
+
 ## 0.9.17 · Nov 21, 2026
 - GPU guard fix: it now keeps trying until the capture is using the GPU, instead of giving up if it started watching too early.
 

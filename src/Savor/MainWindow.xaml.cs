@@ -2332,18 +2332,22 @@ public partial class MainWindow : Window
         }
         try
         {
-            // GPU counters read for a running ffmpeg (the CI machine has only Windows' basic display driver)
-            // uploads every frame to the GPU and back, so the process really uses it
-            using var gp = Process.Start(Ffmpeg.StartInfo(new[] { "-hide_banner", "-nostdin", "-v", "error",
-                "-init_hw_device", "d3d11va=gpu", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=60:d=6",
-                "-vf", "format=nv12,hwupload,hwdownload,format=nv12", "-f", "null", "-" }))!;
-            var gpErr = gp.StandardError.ReadToEndAsync();
-            using var mon = new GpuUsage(new[] { gp.Id }); // created before ffmpeg opens the GPU, like in capture
-            string r = "no samples";
-            for (int i = 0; i < 4; i++) { await Task.Delay(700); var u = mon.Sample(); if (u != null) r = GpuUsage.Describe(u) + $" ({u.Count} engine types)"; }
-            await gp.WaitForExitAsync();
-            var ge = (await gpErr).Trim();
-            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: " + r + (ge.Length > 0 ? " | ffmpeg: " + ge[..Math.Min(200, ge.Length)] : "") + "\n");
+            // GPU counters, read for Windows' desktop compositor (it always draws with the GPU, even on this
+            // GPU-less CI machine), while a window is being redrawn so it has work to do
+            var dwm = Process.GetProcessesByName("dwm").FirstOrDefault();
+            string r = dwm == null ? "no dwm" : "no samples";
+            if (dwm != null)
+            {
+                using var mon = new GpuUsage(new[] { dwm.Id });
+                for (int i = 0; i < 6; i++) // even count: the window ends at its original size
+                {
+                    Width += i % 2 == 0 ? 40 : -40; // make the desktop redraw
+                    await Task.Delay(600);
+                    var u = mon.Sample();
+                    if (u != null) r = (u.Count == 0 ? "counters found, no engines" : GpuUsage.Describe(u)) + $" ({u.Count} engine types)";
+                }
+            }
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters (dwm): " + r + "\n");
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: FAILED " + ex.Message + "\n"); }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
