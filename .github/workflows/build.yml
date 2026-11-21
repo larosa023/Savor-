@@ -147,6 +147,12 @@ jobs:
           $env:SAVOR_SELFTEST_TRAY = "1"
           $p = Start-Process publish/Savor.exe -PassThru
           Start-Sleep 40
+          # CPU Savor itself uses while sitting in the tray with the replay buffer running (not counting ffmpeg)
+          $p.Refresh(); $cpu0 = $p.TotalProcessorTime; $t0 = Get-Date
+          Start-Sleep 20
+          $p.Refresh(); $cpuMs = ($p.TotalProcessorTime - $cpu0).TotalMilliseconds; $wall = ((Get-Date) - $t0).TotalMilliseconds
+          $lc = "Tray idle CPU: Savor $([math]::Round(100 * $cpuMs / $wall / [Environment]::ProcessorCount, 2))% of the PC ($([math]::Round($cpuMs)) ms over $([math]::Round($wall / 1000)) s)"
+          Write-Host "::notice::$lc"; $lc | Out-File diag.txt -Append
           [System.Windows.Forms.SendKeys]::SendWait("%{F7}")   # marker hotkey, from the tray
           Start-Sleep 3
           [System.Windows.Forms.SendKeys]::SendWait("%{F6}")   # screenshot hotkey

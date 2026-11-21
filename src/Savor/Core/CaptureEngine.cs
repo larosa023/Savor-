@@ -821,9 +821,8 @@ public sealed class CaptureEngine : IDisposable
             foreach (var pr in new[] { p, _capProc })
             {
                 if (pr == null) continue;
-                pr.Refresh();
                 if (pr.HasExited) return;
-                total += pr.PrivateMemorySize64;
+                total += ProcessMemory.Private(pr);
             }
             // encoded video waiting between the two processes counts too (normally a few MB)
             EngineMemory = total + Interlocked.Read(ref _relayBytes);
@@ -919,12 +918,13 @@ public sealed class CaptureEngine : IDisposable
                 for (int off = 0, k = 0; off < buf.Length; off += pieceBytes, k++)
                 {
                     long due = heard + (long)((double)k * PieceFrames / _audioRate * Stopwatch.Frequency) + delay;
+                    // sleep, never spin: with 1 ms timer resolution a piece goes out within ~1 ms of its time, far
+                    // inside what the audio resampler absorbs, and the thread uses no CPU while it waits
                     while (true)
                     {
                         long wait = due - Stopwatch.GetTimestamp();
-                        if (wait <= 0) break;
-                        int ms = (int)(wait * 1000 / Stopwatch.Frequency);
-                        if (ms >= 2) Thread.Sleep(ms - 1); else Thread.SpinWait(200);
+                        if (wait * 2000 < Stopwatch.Frequency) break; // under half a millisecond: close enough
+                        Thread.Sleep(Math.Max(1, (int)(wait * 1000 / Stopwatch.Frequency)));
                     }
                     output.Write(buf, off, Math.Min(pieceBytes, buf.Length - off));
                 }
@@ -1150,16 +1150,21 @@ public static class VideoRelay
     /// <param name="queued">Called with +bytes when a chunk is queued and -bytes when it has been passed on.</param>
     public static (Thread reader, Thread writer) Start(Stream from, Stream to, Action<long>? queued = null)
     {
-        var chunks = new BlockingCollection<byte[]>(new ConcurrentQueue<byte[]>());
+        // chunks are rented and returned, so a steady stream of video allocates nothing
+        var pool = System.Buffers.ArrayPool<byte>.Shared;
+        var chunks = new BlockingCollection<(byte[] buf, int len)>(new ConcurrentQueue<(byte[], int)>());
         var reader = new Thread(() =>
         {
-            var buf = new byte[1 << 16];
             try
             {
-                int n;
-                while ((n = from.Read(buf, 0, buf.Length)) > 0)
+                while (true)
                 {
-                    chunks.Add(buf.AsSpan(0, n).ToArray());
+                    var buf = pool.Rent(1 << 16);
+                    int n;
+                    try { n = from.Read(buf, 0, buf.Length); }
+                    catch { pool.Return(buf); throw; }
+                    if (n <= 0) { pool.Return(buf); break; }
+                    chunks.Add((buf, n));
                     queued?.Invoke(n);
                 }
             }
@@ -1168,17 +1173,21 @@ public static class VideoRelay
         }) { IsBackground = true, Name = "Savor video relay in", Priority = ThreadPriority.Highest };
         var writer = new Thread(() =>
         {
-            try
+            bool broken = false;
+            foreach (var (buf, len) in chunks.GetConsumingEnumerable())
             {
-                foreach (var c in chunks.GetConsumingEnumerable())
-                {
-                    to.Write(c, 0, c.Length);
-                    to.Flush();
-                    queued?.Invoke(-c.Length);
-                }
+                if (!broken)
+                    try
+                    {
+                        to.Write(buf, 0, len);
+                        // flush only when nothing else is waiting: fewer, larger writes into the pipe
+                        if (chunks.Count == 0) to.Flush();
+                    }
+                    catch { broken = true; } // mux process gone: keep draining so the capture process never blocks
+                queued?.Invoke(-len);
+                pool.Return(buf);
             }
-            catch { }
-            finally { try { to.Close(); } catch { } } // end of video: the mux process finishes its last piece
+            try { to.Close(); } catch { } // end of video: the mux process finishes its last piece
         }) { IsBackground = true, Name = "Savor video relay out", Priority = ThreadPriority.AboveNormal };
         reader.Start();
         writer.Start();

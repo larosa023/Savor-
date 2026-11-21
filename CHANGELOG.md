@@ -1,5 +1,12 @@
 # What's new in Savor
 
+## 0.9.15 · Nov 20, 2026
+Performance pass: less work while the replay buffer runs.
+- The audio feed now sleeps between pieces instead of spinning the CPU (it was using 10–20% of a CPU thread the whole time the buffer ran with audio on).
+- The dropped-frame check reads frame sizes straight from the buffer files instead of starting FFmpeg every 2 seconds. It gives exactly the same numbers.
+- Video passing between the two capture processes reuses its memory instead of allocating new buffers for every chunk.
+- The once-a-second capture memory check reads just Savor's own processes instead of taking a snapshot of every process on the PC.
+
 ## 0.9.14 · Nov 20, 2026
 - New: screenshot hotkey (Alt + F6, change it in Settings → Hotkeys). Saves a full-quality PNG of the captured display to Captures, named after the game, with the replay buffer on or off. Screenshots show in Captures with a SHOT badge, open in your photo viewer, and work with search, game filters, rename, copy and delete.
 - New: Storage on the Captures page. See how much space your captures use per game, and clean up captures older than 7–180 days in one click (to the Recycle Bin). Anything you renamed, edited or merged is always kept.

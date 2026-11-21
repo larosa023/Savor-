@@ -2098,7 +2098,7 @@ public partial class MainWindow : Window
         {
             var (_, e) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", segs[0] }, TimeSpan.FromSeconds(10));
             var st = System.Text.RegularExpressions.Regex.Match(e, @"start: ([\d.]+)");
-            info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, "Audio:").Count}, timeline starts at {(st.Success ? st.Groups[1].Value : "?")} s";
+            info = $"audio streams in first piece: {System.Text.RegularExpressions.Regex.Matches(e, @"Stream #\d+:\d+\S*: Audio:").Count}, timeline starts at {(st.Success ? st.Groups[1].Value : "?")} s";
             // repeated frames in the middle pieces (the test picture changes every frame)
             int frames = 0, repeats = 0;
             foreach (var seg in segs.Skip(1).Take(Math.Max(0, segs.Length - 2)))
@@ -2145,7 +2145,11 @@ public partial class MainWindow : Window
             var (code, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", src,
                 "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-g", "120", "-bf", "0", "-f", "mpegts", f }, TimeSpan.FromSeconds(60));
             var n = code == 0 ? await FrameCheck.FreezesInFileAsync(f, 1280L * 720) : null;
-            parts.Add($"{name}={(n?.ToString() ?? "error " + err.Trim().Split('\n')[0])}");
+            // Savor's own TS reader must give exactly ffmpeg's frame sizes
+            var mine = code == 0 ? FrameCheck.TsFrameSizes(f) : null;
+            var theirs = code == 0 ? await FrameCheck.FrameSizesAsync(f) : null;
+            string same = mine != null && theirs != null && mine.SequenceEqual(theirs) ? "" : $" (reader mismatch: {mine?.Count}/{theirs?.Count} frames)";
+            parts.Add($"{name}={(n?.ToString() ?? "error " + err.Trim().Split('\n')[0])}{same}");
         }
         try { Directory.Delete(dir, true); } catch { }
         return "frame check (freezes per 4 s): " + string.Join(", ", parts);

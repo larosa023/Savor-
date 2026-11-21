@@ -41,11 +41,69 @@ public static class FrameCheck
         return freezes;
     }
 
-    /// <summary>Reads a piece's frame sizes (stream copy, no decoding) and counts freezes. Null if it can't be read.</summary>
+    /// <summary>Reads a piece's frame sizes (no decoding) and counts freezes. Null if it can't be read.</summary>
     public static async Task<int?> FreezesInFileAsync(string path, long pixels)
     {
-        var sizes = await FrameSizesAsync(path);
+        // buffer pieces are MPEG-TS: read them directly (no ffmpeg process); anything else goes through ffmpeg
+        var sizes = path.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ? await Task.Run(() => TsFrameSizes(path)) : null;
+        sizes ??= await FrameSizesAsync(path);
         return sizes == null ? null : Freezes(sizes, pixels);
+    }
+
+    [ThreadStatic] static byte[]? _tsBuf;
+
+    /// <summary>
+    /// Video frame sizes from an MPEG-TS file, without ffmpeg: the muxer writes each frame as one PES packet, so a
+    /// frame's size is the payload carried on the video PID from one packet start to the next. Matches ffmpeg's own
+    /// packet sizes (checked against framecrc on H.264, HEVC and AV1 captures). Null if no video stream is found.
+    /// </summary>
+    public static List<int>? TsFrameSizes(string path)
+    {
+        try
+        {
+            using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                                                    System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete, 1, false);
+            var buf = _tsBuf ??= new byte[188 * 1024];
+            var sizes = new List<int>(256);
+            int vpid = -1, cur = -1;
+            int got;
+            while ((got = ReadFull(fs, buf)) >= 188)
+            {
+                for (int off = 0; off + 188 <= got; off += 188)
+                {
+                    if (buf[off] != 0x47) return sizes.Count > 0 ? sizes : null; // lost sync: use what was read
+                    bool start = (buf[off + 1] & 0x40) != 0;
+                    int pid = ((buf[off + 1] & 0x1F) << 8) | buf[off + 2];
+                    int afc = (buf[off + 3] >> 4) & 3;
+                    if (afc is 0 or 2) continue; // no payload
+                    int p = afc == 3 ? 5 + buf[off + 4] : 4;
+                    if (p >= 188) continue;
+                    if (start && p + 9 <= 188 && buf[off + p] == 0 && buf[off + p + 1] == 0 && buf[off + p + 2] == 1)
+                    {
+                        int sid = buf[off + p + 3];
+                        if (vpid < 0 && sid >= 0xE0 && sid <= 0xEF) vpid = pid;
+                        if (pid == vpid)
+                        {
+                            if (cur >= 0) sizes.Add(cur);
+                            cur = 188 - p - (9 + buf[off + p + 8]); // payload after the PES header
+                            continue;
+                        }
+                    }
+                    if (pid == vpid && cur >= 0) cur += 188 - p;
+                }
+                if (got < buf.Length) break;
+            }
+            if (cur >= 0) sizes.Add(cur);
+            return vpid < 0 ? null : sizes;
+        }
+        catch { return null; }
+    }
+
+    static int ReadFull(System.IO.Stream s, byte[] buf)
+    {
+        int got = 0, n;
+        while (got < buf.Length && (n = s.Read(buf, got, buf.Length - got)) > 0) got += n;
+        return got;
     }
 
     public static async Task<List<int>?> FrameSizesAsync(string path)

@@ -127,7 +127,7 @@ public sealed class PreviewSource : IDisposable
                     try
                     {
                         var p = _proc;
-                        if (p != null) { p.Refresh(); if (p.PrivateMemorySize64 > (1L << 30)) { p.Kill(true); return; } }
+                        if (p != null) { if (ProcessMemory.Private(p) > (1L << 30)) { p.Kill(true); return; } }
                     }
                     catch { }
                 }
