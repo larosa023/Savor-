@@ -445,6 +445,11 @@ public sealed class CaptureEngine : IDisposable
                 if (!r.StartsWith("normal")) break;
             }
             AddLog($"Capture GPU priority: {GpuPriority}");
+            if (!ReferenceEquals(_proc, p)) return;
+            var pids = new List<int>();
+            foreach (var pr in new[] { p, cap }) try { if (pr is { HasExited: false }) pids.Add(pr.Id); } catch { }
+            var mon = new GpuUsage(pids);
+            lock (_gpuLock) { _gpuMon?.Dispose(); _gpuMon = mon; _gpuSamples.Clear(); }
         });
         _audioOn = audio;
         if (split && cap != null && _audioPipe != null && _audioQueue != null)
@@ -740,6 +745,7 @@ public sealed class CaptureEngine : IDisposable
             _proc = null;
             _capProc = null;
             _relayIn = _relayOut = null;
+            lock (_gpuLock) { _gpuMon?.Dispose(); _gpuMon = null; _gpuSamples.Clear(); }
         }
     }
 
@@ -976,6 +982,74 @@ public sealed class CaptureEngine : IDisposable
         return list;
     }
 
+    // ---- GPU guard: capture should use a small slice of the GPU; if it ever runs away, restart it ----
+    readonly object _gpuLock = new();
+    GpuUsage? _gpuMon;
+    readonly Queue<(DateTime when, Dictionary<string, double> use)> _gpuSamples = new();
+    DateTime _lastGpuSample = DateTime.MinValue;
+    readonly List<DateTime> _gpuRestarts = new();
+
+    /// <summary>A busy engine at or above this, averaged over GpuWindow, counts as runaway.</summary>
+    public const double GpuRunawayPercent = 70;
+    static readonly TimeSpan GpuWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>The capture's average GPU use over the last 30 s, per engine ("VideoEncode 14%, 3D 2%"), for diagnostics.</summary>
+    public string GpuUse
+    {
+        get
+        {
+            lock (_gpuLock)
+            {
+                if (_gpuMon == null) return IsRunning ? "measuring…" : "not running";
+                if (_gpuSamples.Count == 0) return "measuring…";
+                return GpuUsage.Describe(Average());
+            }
+        }
+    }
+
+    /// <summary>Raised when the GPU guard restarted the capture; the argument describes what it saw.</summary>
+    public event Action<string>? GpuRunaway;
+
+    Dictionary<string, double> Average()
+    {
+        var avg = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, use) in _gpuSamples)
+            foreach (var (k, v) in use) avg[k] = (avg.TryGetValue(k, out var a) ? a : 0) + v / _gpuSamples.Count;
+        return avg;
+    }
+
+    void CheckGpu()
+    {
+        if (DateTime.UtcNow - _lastGpuSample < TimeSpan.FromSeconds(2)) return;
+        _lastGpuSample = DateTime.UtcNow;
+        string? runaway = null;
+        lock (_gpuLock)
+        {
+            var use = _gpuMon?.Sample();
+            if (use == null) return;
+            _gpuSamples.Enqueue((DateTime.UtcNow, use));
+            while (_gpuSamples.Count > 0 && DateTime.UtcNow - _gpuSamples.Peek().when > GpuWindow) _gpuSamples.Dequeue();
+            // judge only on a full window of samples
+            if (_gpuSamples.Count < 12 || DateTime.UtcNow - _gpuSamples.Peek().when < GpuWindow - TimeSpan.FromSeconds(4)) return;
+            var avg = Average();
+            var top = avg.OrderByDescending(x => x.Value).First();
+            if (top.Value >= GpuRunawayPercent) runaway = GpuUsage.Describe(avg);
+            if (runaway != null) _gpuSamples.Clear();
+        }
+        if (runaway == null) return;
+        AddLog($"GPU guard: capture used {runaway} for 30 s");
+        _gpuRestarts.RemoveAll(t => DateTime.UtcNow - t > TimeSpan.FromHours(1));
+        if (_gpuRestarts.Count >= 2)
+        {
+            // already restarted twice this hour: it's this PC's normal load, not a stuck state; just tell the user
+            GpuRunaway?.Invoke(runaway + " (not restarted again this hour)");
+            return;
+        }
+        _gpuRestarts.Add(DateTime.UtcNow);
+        GpuRunaway?.Invoke(runaway);
+        ScheduleRecovery("Capture was using too much GPU.", 0);
+    }
+
     // ---- dropped-frame check: each finished piece is looked at once (frame sizes only, no decoding) ----
     readonly Queue<(DateTime when, int freezes)> _freezeLog = new();
     int _checkedSeg = -1;
@@ -1038,6 +1112,7 @@ public sealed class CaptureEngine : IDisposable
             var segs = Segments();
             Watchdog(segs);
             CheckFrames(segs);
+            CheckGpu();
             if (segs.Count == 0) return;
             int newest = segs[^1].Index;
             int need = (int)Math.Ceiling(_settings().ReplaySeconds / (double)SegmentSeconds) + 3;

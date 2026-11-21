@@ -83,6 +83,15 @@ public partial class MainWindow : Window
             if (!_settings.DirectCaptureOff.Contains(id)) { _settings.DirectCaptureOff.Add(id); _settings.Save(); }
         });
         _engine.FramesDropping += n => Dispatcher.BeginInvoke(() => OnFramesDropping(n));
+        _engine.GpuRunaway += what => Dispatcher.BeginInvoke(() =>
+        {
+            SelfLog("GPU guard: " + what);
+            bool again = what.Contains("not restarted");
+            ToastWindow.Notify(again ? "Capture is using a lot of GPU" : "Capture restarted",
+                again ? $"Savor's capture keeps using {what.Replace(" (not restarted again this hour)", "")} of the GPU. Try a lower frame rate or resolution in Settings → Capture, and use Copy diagnostics to send details."
+                      : $"Savor's capture was using {what} of the GPU, far more than normal, so it restarted it. Your replay buffer was kept.",
+                error: again);
+        });
         _engine.MemoryRestarted += mb => Dispatcher.BeginInvoke(() =>
             Notify("Capture restarted", $"Savor's capture engine was using {mb >> 20:N0} MB of memory, so it was restarted in compatibility mode " +
                    "(your replay buffer is kept). If this keeps happening, use Settings → About → Copy diagnostics and send it over.", error: true));
@@ -2321,6 +2330,20 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
                 "cleanup sweeps: " + string.Join(", ", names.Select(n => $"[{n}]={(ClipMeta.StampedPrefix(n) != null ? "yes" : "kept")}")) + "\n");
         }
+        try
+        {
+            // GPU counters read for a running ffmpeg (the CI machine has only Windows' basic display driver)
+            using var gp = Process.Start(Ffmpeg.StartInfo(new[] { "-hide_banner", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                "testsrc2=s=1280x720:r=60:d=6", "-f", "null", "-" }))!;
+            _ = gp.StandardError.ReadToEndAsync();
+            await Task.Delay(500);
+            using var mon = new GpuUsage(new[] { gp.Id });
+            string r = "no samples";
+            for (int i = 0; i < 4; i++) { await Task.Delay(700); var u = mon.Sample(); if (u != null) r = GpuUsage.Describe(u) + $" ({u.Count} engine types)"; }
+            await gp.WaitForExitAsync();
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: " + r + "\n");
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: FAILED " + ex.Message + "\n"); }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "frame check: FAILED " + ex.Message + "\n"); }
 
@@ -3156,6 +3179,7 @@ public partial class MainWindow : Window
              $"separate tracks {(_settings.SeparateAudioTracks ? "on" : "off")} · app tracks {_settings.AppTracks.Count}" +
              (_engine.TrackNames.Count > 0 ? $" · tracks now: {string.Join(", ", _engine.TrackNames)}" : ""));
         Line($"Dropped frames: {_engine.RecentFreezes} short freeze(s) in the last 30 s (warning at {CaptureEngine.FreezeWarnThreshold}, warnings {(_settings.WarnDroppedFrames ? "on" : "off")})");
+        Line($"Capture GPU use (last 30 s): {_engine.GpuUse} (restarts itself at {CaptureEngine.GpuRunawayPercent:0}%)");
         Line($"Capture GPU priority: {_engine.GpuPriority}{(_engine.GpuPriority == "high" ? " (run Savor as administrator for realtime)" : "")}");
         Line($"Replay buffer: {(_engine.BufferActive ? "on" : "off")} ({_settings.ReplaySeconds} s) · recording {(_engine.Recording ? "yes" : "no")} · " +
              $"capture running {(_engine.IsRunning ? "yes" : "no")}");

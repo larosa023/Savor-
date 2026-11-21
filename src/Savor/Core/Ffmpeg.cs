@@ -231,7 +231,9 @@ public static class Ffmpeg
         {
             case "nvidia":
                 int cq = new[] { 32, 27, 23, 19 }[idx];
-                a.AddRange(new[] { "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", cq.ToString(), "-b:v", "0" });
+                // live capture: p3 (about a quarter less encoder work than p4 at the same quality target; clips
+                // come out a little bigger). Exports keep p4.
+                a.AddRange(new[] { "-preset", live ? "p3" : "p4", "-tune", "hq", "-rc", "vbr", "-cq", cq.ToString(), "-b:v", "0" });
                 break;
             case "amd":
                 int qp = new[] { 30, 26, 22, 18 }[idx];
