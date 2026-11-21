@@ -14,19 +14,32 @@ public sealed class GpuUsage : IDisposable
 {
     IntPtr _query;
     readonly List<IntPtr> _counters = new();
+    readonly HashSet<int> _pending;
     bool _primed;
 
     public GpuUsage(IEnumerable<int> pids)
     {
-        try
-        {
-            if (PdhOpenQuery(null, IntPtr.Zero, out _query) != 0) { _query = IntPtr.Zero; return; }
-            foreach (var pid in pids)
+        _pending = new HashSet<int>(pids);
+        try { if (PdhOpenQuery(null, IntPtr.Zero, out _query) != 0) _query = IntPtr.Zero; }
+        catch { _query = IntPtr.Zero; }
+        AddPending();
+    }
+
+    /// <summary>A process only gets GPU counters once it has opened the GPU, so keep trying for the ones that haven't.</summary>
+    void AddPending()
+    {
+        if (_query == IntPtr.Zero || _pending.Count == 0) return;
+        foreach (var pid in _pending.ToList())
+            try
+            {
                 if (PdhAddEnglishCounter(_query, $@"\GPU Engine(pid_{pid}_*)\Utilization Percentage", IntPtr.Zero, out var c) == 0)
+                {
                     _counters.Add(c);
-            if (_counters.Count == 0) Dispose();
-        }
-        catch { Dispose(); }
+                    _pending.Remove(pid);
+                    _primed = false; // a new counter needs a fresh first sample
+                }
+            }
+            catch { }
     }
 
     /// <summary>Percent busy per engine type ("3D", "Copy", "VideoEncode"…), summed over the processes; null when
@@ -36,6 +49,8 @@ public sealed class GpuUsage : IDisposable
         if (_query == IntPtr.Zero) return null;
         try
         {
+            AddPending();
+            if (_counters.Count == 0) return null;
             if (PdhCollectQueryData(_query) != 0) return null;
             if (!_primed) { _primed = true; return null; }
             var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);

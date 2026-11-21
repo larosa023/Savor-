@@ -2333,15 +2333,17 @@ public partial class MainWindow : Window
         try
         {
             // GPU counters read for a running ffmpeg (the CI machine has only Windows' basic display driver)
-            using var gp = Process.Start(Ffmpeg.StartInfo(new[] { "-hide_banner", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
-                "testsrc2=s=1280x720:r=60:d=6", "-f", "null", "-" }))!;
-            _ = gp.StandardError.ReadToEndAsync();
-            await Task.Delay(500);
-            using var mon = new GpuUsage(new[] { gp.Id });
+            // uploads every frame to the GPU and back, so the process really uses it
+            using var gp = Process.Start(Ffmpeg.StartInfo(new[] { "-hide_banner", "-nostdin", "-v", "error",
+                "-init_hw_device", "d3d11va=gpu", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=60:d=6",
+                "-vf", "format=nv12,hwupload,hwdownload,format=nv12", "-f", "null", "-" }))!;
+            var gpErr = gp.StandardError.ReadToEndAsync();
+            using var mon = new GpuUsage(new[] { gp.Id }); // created before ffmpeg opens the GPU, like in capture
             string r = "no samples";
             for (int i = 0; i < 4; i++) { await Task.Delay(700); var u = mon.Sample(); if (u != null) r = GpuUsage.Describe(u) + $" ({u.Count} engine types)"; }
             await gp.WaitForExitAsync();
-            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: " + r + "\n");
+            var ge = (await gpErr).Trim();
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: " + r + (ge.Length > 0 ? " | ffmpeg: " + ge[..Math.Min(200, ge.Length)] : "") + "\n");
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: FAILED " + ex.Message + "\n"); }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }

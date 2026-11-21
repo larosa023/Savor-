@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.17 · Nov 21, 2026
+- GPU guard fix: it now keeps trying until the capture is using the GPU, instead of giving up if it started watching too early.
+
 ## 0.9.16 · Nov 21, 2026
 - New GPU guard: Savor now watches how much of the GPU its capture uses. If it ever climbs far above normal (70% or more of any GPU engine for 30 seconds), Savor restarts the capture on its own, keeps your replay buffer, and tells you. Restarting Savor used to be the only fix.
 - Lighter on the GPU: live capture on NVIDIA now uses a faster encoder setting, about a quarter less encoder work at the same quality (clips may be slightly larger).
