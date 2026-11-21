@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.19 · Nov 21, 2026
+- Lighter live preview: the Studio preview now pauses a few seconds after you switch to another window (it keeps the last picture and picks up again the moment you come back), and runs at 30 fps instead of 60. With Savor open behind other windows it used to keep a whole FFmpeg process busy (about 3 CPU threads and 65 MB); now it uses nothing until you look at it.
+
 ## 0.9.18 · Nov 21, 2026
 - Smoother scrolling: the mouse wheel now glides instead of jumping, in Settings, Captures, the Studio side panel, What's new and the editor's side panel. Each notch also scrolls a bit further.
 

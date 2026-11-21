@@ -117,7 +117,8 @@ public partial class MainWindow : Window
             Root.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
             MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
         };
-        Activated += (_, _) => { if (CapturesPage.Visibility == Visibility.Visible) ReloadClips(); };
+        Activated += (_, _) => { if (CapturesPage.Visibility == Visibility.Visible) ReloadClips(); UpdatePreview(IsVisible); };
+        Deactivated += (_, _) => _deactivatedUtc = DateTime.UtcNow;
         _mainPage = StudioPage;
 
         // Make sure the window handle exists even when starting in the tray, so hotkeys work.
@@ -636,11 +637,16 @@ public partial class MainWindow : Window
         _renderHooked = on;
     }
 
+    DateTime _deactivatedUtc = DateTime.MinValue;
+    bool _previewResuming; // coming back from a background pause: keep showing the last frame until new ones arrive
+
     void UpdatePreview(bool shown)
     {
         var d = _engine.Display;
         var enc = _engine.Encoder;
-        _previewWanted = shown && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
+        // Savor in the background (another window active for a few seconds): pause, keeping the last frame
+        bool background = !IsActive && DateTime.UtcNow - _deactivatedUtc > TimeSpan.FromSeconds(4);
+        _previewWanted = shown && !background && _settings.ShowPreview && StudioPage.Visibility == Visibility.Visible
                          && d != null && enc != null && Ffmpeg.Path != null;
         if (_previewWanted) _previewIdle = false;
         if (!_previewWanted)
@@ -648,6 +654,14 @@ public partial class MainWindow : Window
             if (_previewIdle) return; // already cleaned up; nothing to do every tick
             _previewIdle = true;
             if (_preview.IsRunning) _preview.Stop();
+            if (background && shown && _previewHasFrame && _settings.ShowPreview)
+            {
+                // leave the last picture up, just show it's not live
+                PreviewLiveDot.Fill = (Brush)FindResource("FaintBrush");
+                _lastPreviewStart = DateTime.MinValue; // resume right away when Savor is used again
+                _previewResuming = true;
+                return;
+            }
             _previewHasFrame = false;
             PreviewBrush.ImageSource = null;
             PreviewPlaceholder.Visibility = Visibility.Visible;
@@ -677,10 +691,16 @@ public partial class MainWindow : Window
         {
             _lastPreviewStart = DateTime.UtcNow;
             _preview.Start(d!, enc!, _settings.CaptureCursor, w, h, gpuScale: !_previewGpuFailed);
-            _previewBitmap = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr32, null);
-            RenderOptions.SetBitmapScalingMode(PreviewBrush, BitmapScalingMode.Linear);
-            PreviewBrush.ImageSource = _previewBitmap;
-            _previewHasFrame = false;
+            bool keep = _previewResuming && _previewHasFrame && _previewBitmap is { } old && old.PixelWidth == w && old.PixelHeight == h;
+            _previewResuming = false;
+            if (!keep)
+            {
+                _previewBitmap = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr32, null);
+                RenderOptions.SetBitmapScalingMode(PreviewBrush, BitmapScalingMode.Linear);
+                PreviewBrush.ImageSource = _previewBitmap;
+                _previewHasFrame = false;
+            }
+            else PreviewLiveDot.Fill = (Brush)FindResource("LiveBrush");
             PreviewLabel.Text = $"Display {d!.OutputIndex + 1}  ·  {d.Width}×{d.Height}";
         }
 

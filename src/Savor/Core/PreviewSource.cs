@@ -7,9 +7,9 @@ using System.Threading;
 namespace Savor.Core;
 
 /// <summary>
-/// Live preview of a display. Runs a separate ffmpeg that captures at 60 fps, downscales on the GPU
-/// (scale_d3d11) and streams raw BGRA frames to stdout. It only runs while the Savor window is
-/// visible, so it costs nothing while you're in a game.
+/// Live preview of a display. Runs a separate ffmpeg that captures at 30 fps, downscales on the GPU
+/// (scale_d3d11) and streams raw BGRA frames to stdout. It only runs while the Savor window is open and in
+/// use (it pauses a few seconds after you switch to another window), so it costs nothing while you're in a game.
 /// </summary>
 public sealed class PreviewSource : IDisposable
 {
@@ -53,7 +53,7 @@ public sealed class PreviewSource : IDisposable
         bool gdi = enc.Pipeline == CapturePipeline.Gdi;
         Width = width;
         Height = height;
-        Fps = gdi ? 30 : 60;
+        Fps = 30; // plenty for a small preview, and half the work of 60
         GpuScale = gpuScale && !gdi;
         int frameBytes = Width * Height * 4;
         lock (_lock)
