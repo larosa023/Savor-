@@ -1,5 +1,8 @@
 # What's new in Savor
 
+## 0.9.20 · Nov 22, 2026
+- New: fit a clip to Discord's upload limit. In the editor, under Export, pick "Discord · under 20 MB" (or Nitro Basic 50 MB / Nitro 500 MB). Savor works out the best resolution and frame rate for the length you selected (keeping 60 fps down to 720p), shows it before you export, checks the finished file, and re-encodes slightly smaller if it's ever over. Clips are saved as H.264 with one mixed audio track, so they play inside Discord on every device. If the selection is too long to fit, it tells you how short to trim it.
+
 ## 0.9.19 · Nov 21, 2026
 - Lighter live preview: the Studio preview now pauses a few seconds after you switch to another window (it keeps the last picture and picks up again the moment you come back), and runs at 30 fps instead of 60. With Savor open behind other windows it used to keep a whole FFmpeg process busy (about 3 CPU threads and 65 MB); now it uses nothing until you look at it.
 

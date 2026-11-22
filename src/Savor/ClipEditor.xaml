@@ -310,6 +310,15 @@
                             <ComboBoxItem Content="Video (MP4)" Tag="video" IsSelected="True"/>
                             <ComboBoxItem Content="GIF (no sound)" Tag="gif"/>
                         </ComboBox>
+                        <!-- fit under an upload limit -->
+                        <ComboBox x:Name="SizeCombo" MinWidth="0" Margin="0,0,0,4" SelectionChanged="ExportOptions_Changed"
+                                  ToolTip="Make the file small enough to upload">
+                            <ComboBoxItem Content="Any size (best quality)" Tag="0" IsSelected="True"/>
+                            <ComboBoxItem Content="Discord · under 20 MB" Tag="20"/>
+                            <ComboBoxItem Content="Discord Nitro Basic · under 50 MB" Tag="50"/>
+                            <ComboBoxItem Content="Discord Nitro · under 500 MB" Tag="500"/>
+                        </ComboBox>
+                        <TextBlock x:Name="SizeNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
                         <TextBlock Text="Speed" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,2,0,6"/>
                         <WrapPanel x:Name="SpeedPanel">
                             <RadioButton Style="{StaticResource Seg}" GroupName="Speed" Content="0.25×" Tag="0.25" Checked="ExportOptions_Changed"/>

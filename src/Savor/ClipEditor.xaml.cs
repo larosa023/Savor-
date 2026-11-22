@@ -606,6 +606,7 @@ public partial class ClipEditor : UserControl
         InText.Text = Fmt(_in);
         OutText.Text = Fmt(_out);
         LenText.Text = Fmt(_out - _in);
+        UpdateSizeNote();
         bool trimmed = _in > TimeSpan.Zero || _out < _duration - TimeSpan.FromMilliseconds(50);
         ExportText.Text = IsGif ? "Export GIF" : trimmed || _cropMode != "none" ? "Export" : "Export copy";
     }
@@ -1199,6 +1200,29 @@ public partial class ClipEditor : UserControl
 
     bool IsGif => FormatCombo?.SelectedItem is ComboBoxItem { Tag: "gif" };
 
+    /// <summary>Upload size limit picked in Export, in bytes (0 = any size). Not used for GIFs.</summary>
+    long TargetBytes => !IsGif && SizeCombo?.SelectedItem is ComboBoxItem { Tag: string t } && int.TryParse(t, out var mb) && mb > 0
+        ? mb * 1048576L : 0;
+
+    /// <summary>What a size-limited export will look like for the current selection, or why it won't fit.</summary>
+    void UpdateSizeNote()
+    {
+        if (SizeNote == null) return;
+        long target = TargetBytes;
+        if (target <= 0 || _vw <= 0) { SizeNote.Visibility = Visibility.Collapsed; return; }
+        int w = _vw, h = _vh;
+        if (_cropMode != "none") (w, h) = EvenSize();
+        double secs = (_out - _in).TotalSeconds / Math.Max(0.1, ExportSpeed);
+        var plan = ClipExporter.PlanForSize(target, secs, w, h, 60);
+        SizeNote.Text = plan != null
+            ? $"Will export as {plan.Describe(w, h)} to stay under {target / 1048576} MB."
+            : $"Too long for {target / 1048576} MB: trim the selection to under {FmtSeconds(ClipExporter.MaxSecondsForSize(target, w, h) * Math.Max(0.1, ExportSpeed))}.";
+        SizeNote.Foreground = (Brush)FindResource(plan != null ? "MutedBrush" : "RecBrush");
+        SizeNote.Visibility = Visibility.Visible;
+    }
+
+    static string FmtSeconds(double s) => s >= 60 ? $"{(int)(s / 60)}:{(int)(s % 60):00}" : $"{s:0} s";
+
     double ExportSpeed => SpeedPanel?.Children.OfType<RadioButton>().FirstOrDefault(r => r.IsChecked == true)?.Tag is string t &&
                           double.TryParse(t, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1;
 
@@ -1206,10 +1230,11 @@ public partial class ClipEditor : UserControl
     void ExportOptions_Changed(object sender, RoutedEventArgs e)
     {
         if (!_ready || FastToggle == null) return;
-        bool reencode = IsGif || Math.Abs(ExportSpeed - 1) > 0.001 || Math.Abs(_audioOffset) > 0.0005;
+        bool reencode = IsGif || TargetBytes > 0 || Math.Abs(ExportSpeed - 1) > 0.001 || Math.Abs(_audioOffset) > 0.0005;
         FastToggle.IsEnabled = !reencode && _cropMode == "none";
         if (reencode) FastToggle.IsChecked = false;
-        bool newFile = IsGif || Math.Abs(ExportSpeed - 1) > 0.001;
+        if (SizeCombo != null) SizeCombo.IsEnabled = !IsGif;
+        bool newFile = IsGif || TargetBytes > 0 || Math.Abs(ExportSpeed - 1) > 0.001;
         SaveModeCombo.IsEnabled = !newFile;   // GIFs and speed changes always go to a new file
         if (newFile) SaveModeCombo.SelectedIndex = 0;
         SpeedNote.Visibility = Math.Abs(ExportSpeed - 1) > 0.001 ? Visibility.Visible : Visibility.Collapsed;
@@ -1230,7 +1255,8 @@ public partial class ClipEditor : UserControl
         bool gif = IsGif;
         double speed = ExportSpeed;
         bool changesTiming = Math.Abs(speed - 1) > 0.001;
-        bool replace = !gif && !changesTiming && SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
+        long target = TargetBytes;
+        bool replace = !gif && !changesTiming && target == 0 && SaveModeCombo.SelectedItem is ComboBoxItem { Tag: "replace" };
         var audioTag = (AudioCombo.SelectedItem as ComboBoxItem)?.Tag as string;
         var audio = audioTag switch
         {
@@ -1260,7 +1286,8 @@ public partial class ClipEditor : UserControl
             Crop = crop,
             Audio = audio == AudioExport.Selected && _listen.Count == 0 ? AudioExport.None : audio,
             Tracks = _listen.ToArray(),
-            Fast = FastToggle.IsChecked == true && crop == null && !gif && Math.Abs(speed - 1) < 0.001 && Math.Abs(_audioOffset) < 0.0005,
+            Fast = FastToggle.IsChecked == true && crop == null && !gif && target == 0 && Math.Abs(speed - 1) < 0.001 && Math.Abs(_audioOffset) < 0.0005,
+            TargetBytes = target,
             AudioOffset = _audioOffset,
             Speed = speed,
             Gif = gif,
@@ -1296,7 +1323,9 @@ public partial class ClipEditor : UserControl
                     .Where(m => m >= req.Start.TotalSeconds && m <= req.End.TotalSeconds)
                     .Select(m => (m - req.Start.TotalSeconds) / Math.Max(0.1, speed)).ToArray();
                 (meta is null ? null : meta with { Markers = kept })?.Write(output);
-                ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”.");
+                string sizeText = "";
+                if (target > 0) try { sizeText = $" ({new FileInfo(output).Length / 1048576.0:0.0} MB)"; } catch { }
+                ShowStatus(replace ? "Saved over the original." : $"Saved as “{Path.GetFileName(output)}”{sizeText}.");
                 Exported?.Invoke(output);
             }
         }

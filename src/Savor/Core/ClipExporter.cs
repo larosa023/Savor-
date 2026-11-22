@@ -31,6 +31,18 @@ public sealed class ExportRequest
     public double AudioOffset { get; init; }
     /// <summary>Make an animated GIF (no audio) instead of a video.</summary>
     public bool Gif { get; init; }
+    /// <summary>Keep the file at or under this many bytes (Discord's upload limits); 0 = any size.</summary>
+    public long TargetBytes { get; init; }
+}
+
+/// <summary>How a clip will be encoded to fit a size limit.</summary>
+public sealed record SizePlan(int Height, double Fps, int VideoKbps, int AudioKbps)
+{
+    public string Describe(int srcW, int srcH)
+    {
+        int w = srcH > 0 ? (int)Math.Round(srcW * (double)Height / srcH / 2) * 2 : 0;
+        return $"{(w > 0 ? $"{w}×{Height}" : $"{Height}p")} at {Fps:0} fps, {VideoKbps / 1000.0:0.0} Mbps";
+    }
 }
 
 /// <summary>Trims / crops a clip with the bundled ffmpeg, using the GPU encoder when available.</summary>
@@ -49,6 +61,10 @@ public static class ClipExporter
             if (r.Gif)
             {
                 await RunAsync(BuildGifArgs(r, tmp), duration, progress, ct);
+            }
+            else if (r.TargetBytes > 0)
+            {
+                await ExportToSizeAsync(r, encoder, tmp, duration, progress, ct);
             }
             else if (r.Fast && Math.Abs(r.Speed - 1) < 0.001 && Math.Abs(r.AudioOffset) < 0.0005)
             {
@@ -75,6 +91,115 @@ public static class ClipExporter
             try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
         }
     }
+
+    // ---------- fit to a size limit (Discord) ----------
+
+    /// <summary>Discord's upload limits (MiB): free, Nitro Basic, Nitro. Raised to 20 MB for free accounts in August 2026.</summary>
+    public static readonly (string Name, int Mb)[] DiscordLimits = { ("Discord", 20), ("Discord Nitro Basic", 50), ("Discord Nitro", 500) };
+
+    const double SizeSafety = 0.95;    // container overhead and encoder overshoot
+    const double MinBitsPerPixel = 0.07; // below this H.264 gets visibly blocky in fast game footage
+
+    /// <summary>
+    /// Picks the sharpest resolution / frame rate that still gets enough bits per pixel at the bitrate the limit
+    /// allows. Keeps 60 fps down to 720p before dropping to 30. Null when even 360p at 30 fps won't fit.
+    /// </summary>
+    public static SizePlan? PlanForSize(long targetBytes, double seconds, int srcW, int srcH, double srcFps)
+    {
+        if (seconds <= 0 || srcW <= 0 || srcH <= 0) return null;
+        double totalKbps = targetBytes * 8 / 1000.0 * SizeSafety / seconds;
+        int audio = totalKbps > 1500 ? 128 : totalKbps > 600 ? 96 : 64;
+        double video = totalKbps - audio;
+        if (video < 150) return null;
+        double fpsTop = srcFps > 0 ? Math.Min(60, srcFps) : 60;
+        var ladder = new List<(int h, double fps)>();
+        foreach (var h in new[] { srcH, 1440, 1080, 720 }) if (h <= srcH) ladder.Add((h, fpsTop));
+        foreach (var h in new[] { 1080, 720, 540, 480, 360 }) if (h <= srcH) ladder.Add((h, Math.Min(30, fpsTop)));
+        if (ladder.Count == 0) ladder.Add((srcH, Math.Min(30, fpsTop)));
+        foreach (var (h, fps) in ladder.Distinct())
+        {
+            double w = srcW * (double)h / srcH;
+            if (video * 1000 / (w * h * fps) >= MinBitsPerPixel) return new SizePlan(h, fps, (int)video, audio);
+        }
+        // the smallest size, even if under the ideal bits per pixel, as long as it's not hopeless
+        var (lh, lf) = ladder[^1];
+        double lw = srcW * (double)lh / srcH;
+        return video * 1000 / (lw * lh * lf) >= MinBitsPerPixel / 3 ? new SizePlan(lh, lf, (int)video, audio) : null;
+    }
+
+    /// <summary>The longest selection (in seconds, of the result) that can still fit.</summary>
+    public static double MaxSecondsForSize(long targetBytes, int srcW, int srcH)
+    {
+        double lo = 1, hi = 36000;
+        for (int i = 0; i < 40; i++)
+        {
+            double mid = (lo + hi) / 2;
+            if (PlanForSize(targetBytes, mid, srcW, srcH, 30) != null) lo = mid; else hi = mid;
+        }
+        return lo;
+    }
+
+    static async Task<(int w, int h, double fps)> ProbeVideoAsync(string path, CancellationToken ct)
+    {
+        var (_, err) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-i", path }, TimeSpan.FromSeconds(15), ct);
+        var line = err.Split('\n').FirstOrDefault(l => l.Contains("Video:")) ?? "";
+        var m = System.Text.RegularExpressions.Regex.Match(line, @", (\d{2,5})x(\d{2,5})");
+        var f = System.Text.RegularExpressions.Regex.Match(line, @"([\d.]+) fps");
+        return (m.Success ? int.Parse(m.Groups[1].Value) : 0, m.Success ? int.Parse(m.Groups[2].Value) : 0,
+                f.Success ? double.Parse(f.Groups[1].Value, CultureInfo.InvariantCulture) : 60);
+    }
+
+    /// <summary>H.264 (plays everywhere Discord does) with an average bitrate, from the same vendor as the usual encoder.</summary>
+    static EncoderDef H264For(EncoderDef? preferred)
+    {
+        var all = Ffmpeg.Encoders;
+        return all.FirstOrDefault(e => e.Codec == "h264" && e.Vendor == preferred?.Vendor)
+            ?? all.FirstOrDefault(e => e.Codec == "h264" && e.Vendor == "cpu")
+            ?? all[^1];
+    }
+
+    static string[] BitrateArgs(EncoderDef enc, int kbps)
+    {
+        string b = $"{kbps}k", max = $"{(int)(kbps * 1.3)}k", buf = $"{kbps * 2}k";
+        return enc.Vendor switch
+        {
+            "nvidia" => new[] { "-c:v", enc.FfmpegName, "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-multipass", "fullres",
+                                "-b:v", b, "-maxrate", max, "-bufsize", buf, "-profile:v", "high" },
+            "amd" => new[] { "-c:v", enc.FfmpegName, "-quality", "quality", "-rc", "vbr_peak", "-b:v", b, "-maxrate", max, "-bufsize", buf },
+            "intel" => new[] { "-c:v", enc.FfmpegName, "-preset", "slower", "-b:v", b, "-maxrate", max, "-bufsize", buf },
+            _ => new[] { "-c:v", enc.FfmpegName, "-preset", "medium", "-b:v", b, "-maxrate", max, "-bufsize", buf, "-profile:v", "high" },
+        };
+    }
+
+    static async Task ExportToSizeAsync(ExportRequest r, EncoderDef? preferred, string tmp, TimeSpan duration,
+                                       IProgress<double>? progress, CancellationToken ct)
+    {
+        var (w, h, fps) = await ProbeVideoAsync(r.Input, ct);
+        if (r.Crop is { } c) { w = c.Width; h = c.Height; }
+        var plan = PlanForSize(r.TargetBytes, duration.TotalSeconds, w, h, fps)
+            ?? throw new InvalidOperationException(
+                $"Too long to fit in {r.TargetBytes / 1048576} MB. Trim it to under {FormatSeconds(MaxSecondsForSize(r.TargetBytes, w, h))}.");
+        var enc = H264For(preferred);
+        int video = plan.VideoKbps;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            progress?.Report(0);
+            try { await RunAsync(BuildArgs(r, enc, QualityPreset.High, tmp, plan with { VideoKbps = video }, h), duration, progress, ct); }
+            catch (Exception) when (!ct.IsCancellationRequested && enc.Vendor != "cpu")
+            {
+                enc = H264For(null); // GPU encoder refused: CPU
+                await RunAsync(BuildArgs(r, enc, QualityPreset.High, tmp, plan with { VideoKbps = video }, h), duration, progress, ct);
+            }
+            long size = new FileInfo(tmp).Length;
+            if (size <= r.TargetBytes) return;
+            // over: aim lower by the overshoot, plus a margin
+            video = (int)(video * (double)r.TargetBytes / size * 0.93) - plan.AudioKbps / 4;
+            if (video < 100) break;
+        }
+        throw new InvalidOperationException($"Couldn't get it under {r.TargetBytes / 1048576} MB. Try a shorter selection.");
+    }
+
+    static string FormatSeconds(double s) => s >= 60 ? $"{(int)(s / 60)}:{(int)(s % 60):00}" : $"{s:0} seconds";
 
     static string Sec(TimeSpan t) => t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
 
@@ -119,8 +244,15 @@ public static class ClipExporter
         return a;
     }
 
-    static List<string> BuildArgs(ExportRequest r, EncoderDef? enc, QualityPreset quality, string output)
+    static List<string> BuildArgs(ExportRequest r, EncoderDef? enc, QualityPreset quality, string output,
+                                  SizePlan? plan = null, int srcH = 0)
     {
+        if (plan != null && r.Audio == AudioExport.AllTracks)
+            r = new ExportRequest // one track (the mix): what Discord plays, and fewer bits
+            {
+                Input = r.Input, Output = r.Output, Start = r.Start, End = r.End, Crop = r.Crop, Audio = AudioExport.MixOnly,
+                Tracks = r.Tracks, Speed = r.Speed, AudioOffset = r.AudioOffset, TargetBytes = r.TargetBytes
+            };
         bool speed = Math.Abs(r.Speed - 1) > 0.001 && enc != null;
         var a = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats" };
         // -t as an input option limits what is read, so a slowed-down result isn't cut short
@@ -149,11 +281,18 @@ public static class ClipExporter
             var filters = new List<string>();
             if (r.Crop is { } c) filters.Add($"crop={c.Width}:{c.Height}:{c.X}:{c.Y}");
             if (speed) filters.Add(SpeedFilter(r.Speed));
+            if (plan != null)
+            {
+                int ch = r.Crop?.Height ?? srcH;
+                if (ch <= 0 || plan.Height < ch) filters.Add($"scale=-2:{plan.Height}:flags=lanczos");
+                filters.Add($"fps={plan.Fps.ToString("0.###", CultureInfo.InvariantCulture)}");
+            }
             filters.Add(enc.Vendor == "cpu" ? "format=yuv420p" : "format=nv12");
             a.AddRange(new[] { "-vf", string.Join(",", filters) });
             var q = quality < QualityPreset.High ? QualityPreset.High : quality;
-            a.AddRange(Ffmpeg.EncoderArgs(enc, q, 60, live: false));
-            if (r.Audio != AudioExport.None) a.AddRange(new[] { "-c:a", "aac", "-b:a", "192k" });
+            a.AddRange(plan != null ? BitrateArgs(enc, plan.VideoKbps) : Ffmpeg.EncoderArgs(enc, q, 60, live: false));
+            if (r.Audio != AudioExport.None)
+                a.AddRange(plan != null ? new[] { "-c:a", "aac", "-b:a", $"{plan.AudioKbps}k", "-ac", "2" } : new[] { "-c:a", "aac", "-b:a", "192k" });
             // each kept track gets the same tempo change (the mixed "selected" track already has it)
             var af = new List<string>();
             if (AudioShift(r.AudioOffset) is { } shift) af.Add(shift);

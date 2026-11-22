@@ -2370,6 +2370,30 @@ public partial class MainWindow : Window
             File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters (dwm): " + r + "\n");
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "gpu usage counters: FAILED " + ex.Message + "\n"); }
+        try
+        {
+            // fit-to-size export through the real exporter: busy 720p60 footage, 20 s, into 3 MB
+            var dir = Path.Combine(AppSettings.LocalDataDir, "size-test");
+            Directory.CreateDirectory(dir);
+            var src = Path.Combine(dir, "src.mp4");
+            await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=60:d=20",
+                "-f", "lavfi", "-i", "sine=f=440:d=20", "-vf", "noise=alls=20:allf=t", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                "-c:a", "aac", "-shortest", src }, TimeSpan.FromSeconds(120));
+            var outp = Path.Combine(dir, "out.mp4");
+            const long target = 3 * 1048576;
+            var plan = ClipExporter.PlanForSize(target, 20, 1280, 720, 60);
+            var sw = Stopwatch.StartNew();
+            await ClipExporter.ExportAsync(new ExportRequest { Input = src, Output = outp, Start = TimeSpan.Zero, End = TimeSpan.FromSeconds(20), TargetBytes = target },
+                null, QualityPreset.High, null, CancellationToken.None);
+            var (_, info) = await Ffmpeg.RunAsync(new[] { "-hide_banner", "-i", outp }, TimeSpan.FromSeconds(10));
+            var v = System.Text.RegularExpressions.Regex.Match(info, @"Video: (\w+).*?(\d{2,5}x\d{2,5}).*?([\d.]+) fps");
+            long size = new FileInfo(outp).Length;
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"fit to size: {size / 1048576.0:0.00} MB of {target / 1048576} MB {(size <= target ? "OK" : "OVER")}, plan {plan?.Describe(1280, 720)}, got {v.Groups[1].Value} {v.Groups[2].Value} {v.Groups[3].Value} fps, audio streams {System.Text.RegularExpressions.Regex.Matches(info, @"Stream #\d+:\d+\S*: Audio:").Count}, {sw.Elapsed.TotalSeconds:0.0} s" +
+                $"; 10-min clip into 20 MB: {(ClipExporter.PlanForSize(20 * 1048576L, 600, 2560, 1440, 60) == null ? $"refused, max {ClipExporter.MaxSecondsForSize(20 * 1048576L, 2560, 1440):0} s" : "planned")}\n");
+            try { Directory.Delete(dir, true); } catch { }
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "fit to size: FAILED " + ex.Message + "\n"); }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "frame check: FAILED " + ex.Message + "\n"); }
 
