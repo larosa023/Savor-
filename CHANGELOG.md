@@ -1,5 +1,10 @@
 # What's new in Savor
 
+## 0.9.22 · Nov 28, 2026
+- Fixed: the "No game" filter jumped straight back to All.
+- Fixed: Captures only ever showed the 60 newest captures. Every capture shows now: more cards load as you scroll down (60 at a time, so memory stays low).
+- Ctrl+A now selects every capture in the current filter or search, including ones further down that haven't loaded yet, so you can set the game of all your untagged clips in one go.
+
 ## 0.9.21 · Nov 28, 2026
 - New: sort captures. Next to search on the Captures page: newest or oldest first, largest or smallest first, name A–Z / Z–A, or grouped by game. Savor remembers your choice.
 - Older clips (ones Savor didn't record, or recorded before games were tracked) can be given a game, and it now sticks on any drive. Savor used to store the game only on the file itself, which exFAT/FAT drives and some synced folders silently drop; it now keeps its own record as a backup.

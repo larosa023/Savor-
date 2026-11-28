@@ -664,7 +664,8 @@
                     <WrapPanel x:Name="GameFilters" Margin="0,-4,0,10" Visibility="Collapsed"/>
                 </StackPanel>
                 <Grid Grid.Row="2">
-                    <ScrollViewer local:SmoothScroll.Enabled="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,-10,0">
+                    <ScrollViewer x:Name="ClipScroll" local:SmoothScroll.Enabled="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,-10,0"
+                                  ScrollChanged="ClipScroll_ScrollChanged">
                         <ItemsControl x:Name="ClipList" ItemTemplate="{StaticResource ClipTemplate}" Margin="0,0,0,10">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>

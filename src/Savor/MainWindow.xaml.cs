@@ -1204,7 +1204,20 @@ public partial class MainWindow : Window
 
     string? _gameFilter;      // null = all captures
     string _filterSignature = "";
-    const int MaxCards = 60;  // newest N cards (thumbnails cost memory)
+    const int CardPage = 60;  // cards are added 60 at a time as you scroll (thumbnails cost memory)
+    int _cardLimit = CardPage;
+    int _cardsAvailable;      // how many captures match the current filter / search
+    List<ClipItem> _matching = new(); // every capture matching the filter / search, in order (cards show the first _cardLimit)
+    string _listKey = "";     // filter + search + sort: a change starts again from the top
+
+    /// <summary>Near the bottom of the list: show the next batch of cards.</summary>
+    void ClipScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_cardsAvailable <= _cardLimit || ClipScroll.ScrollableHeight <= 0) return;
+        if (ClipScroll.VerticalOffset < ClipScroll.ScrollableHeight - 700) return;
+        _cardLimit += CardPage;
+        RefreshClips(rescan: false);
+    }
 
     List<ClipItem> _all = new(); // the last folder scan (search and game chips filter this, no disk access)
 
@@ -1245,7 +1258,17 @@ public partial class MainWindow : Window
                                                                                    : string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase)))
                           .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                                       (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
-        var items = Sorted(filtered).Take(MaxCards).ToList();
+        var listKey = $"{_gameFilter}|{q}|{_settings.ClipSort}";
+        if (listKey != _listKey)
+        {
+            _listKey = listKey;
+            _cardLimit = CardPage;
+            ClipScroll?.ScrollToTop();
+        }
+        var sorted = Sorted(filtered).ToList();
+        _matching = sorted;
+        _cardsAvailable = sorted.Count;
+        var items = sorted.Take(_cardLimit).ToList();
         var known = new Dictionary<string, ClipItem>(StringComparer.Ordinal); // a case-only rename must show the new name
         foreach (var c in _clips) known[c.FilePath + "|" + c.Size] = c;
         var next = new List<ClipItem>(items.Count);
@@ -1261,8 +1284,8 @@ public partial class MainWindow : Window
             _clips.Clear();
             foreach (var c in next) _clips.Add(c);
         }
-        // keep the selection for captures still shown
-        _selected.IntersectWith(_clips.Select(c => c.FilePath));
+        // keep the selection for captures still matching (including ones further down, not loaded as cards yet)
+        _selected.IntersectWith(sorted.Select(c => c.FilePath));
         foreach (var c in _clips) c.IsSelected = _selected.Contains(c.FilePath);
         UpdateSelectionBar();
 
@@ -1454,7 +1477,7 @@ public partial class MainWindow : Window
         UpdateSelectionBar();
     }
 
-    List<ClipItem> SelectedClips() => _clips.Where(c => c.IsSelected).ToList();
+    List<ClipItem> SelectedClips() => _matching.Where(c => _selected.Contains(c.FilePath)).ToList();
 
     void UpdateSelectionBar()
     {
@@ -1643,7 +1666,7 @@ public partial class MainWindow : Window
             .Select(g => (Name: g.First().Game!, Count: g.Count(), Latest: g.Max(c => c.Created)))
             .OrderByDescending(g => g.Latest)
             .ToList();
-        if (_gameFilter != null && !games.Any(g => string.Equals(g.Name, _gameFilter, StringComparison.OrdinalIgnoreCase)))
+        if (_gameFilter != null && _gameFilter != NoGameFilter && !games.Any(g => string.Equals(g.Name, _gameFilter, StringComparison.OrdinalIgnoreCase)))
             _gameFilter = null;
 
         int noGame = all.Count(c => c.Game == null);
@@ -3403,7 +3426,9 @@ public partial class MainWindow : Window
             if (e.Key == Key.Escape && _selected.Count > 0) { ClearSelection(); e.Handled = true; return; }
             if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                foreach (var c in _clips) SetSelected(c, true);
+                // everything matching the filter / search, not just the cards loaded so far
+                foreach (var c in _matching) _selected.Add(c.FilePath);
+                foreach (var c in _clips) c.IsSelected = true;
                 UpdateSelectionBar();
                 e.Handled = true;
                 return;
