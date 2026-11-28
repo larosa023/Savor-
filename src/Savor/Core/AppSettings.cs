@@ -148,6 +148,8 @@ public sealed class AppSettings
     public bool WarnDroppedFrames { get; set; } = true;
     /// <summary>Captures → Storage → Clean up: captures older than this many days.</summary>
     public int CleanupDays { get; set; } = 30;
+    /// <summary>Captures page order: newest, oldest, largest, smallest, name, namedesc, game.</summary>
+    public string ClipSort { get; set; } = "newest";
 
     public int ReplaySeconds { get; set; } = 60;
     public bool StartBufferOnLaunch { get; set; } = true;

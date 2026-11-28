@@ -130,6 +130,7 @@ public static class Library
         }
 
         meta?.Write(target);
+        ClipMeta.Forget(path);
         try
         {
             if (oldKey != null)

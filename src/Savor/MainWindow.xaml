@@ -617,6 +617,17 @@
                             <TextBlock Text="Storage"/>
                         </StackPanel>
                     </Button>
+                    <!-- sort order -->
+                    <ComboBox x:Name="SortCombo" DockPanel.Dock="Right" MinWidth="0" Width="150" Margin="0,0,10,0" VerticalAlignment="Center"
+                              SelectionChanged="Sort_Changed" ToolTip="Sort captures">
+                        <ComboBoxItem Content="Newest first" Tag="newest"/>
+                        <ComboBoxItem Content="Oldest first" Tag="oldest"/>
+                        <ComboBoxItem Content="Largest first" Tag="largest"/>
+                        <ComboBoxItem Content="Smallest first" Tag="smallest"/>
+                        <ComboBoxItem Content="Name A–Z" Tag="name"/>
+                        <ComboBoxItem Content="Name Z–A" Tag="namedesc"/>
+                        <ComboBoxItem Content="By game" Tag="game"/>
+                    </ComboBox>
                     <!-- search by name or game -->
                     <Grid DockPanel.Dock="Right" Width="230" Margin="0,0,10,0" VerticalAlignment="Center">
                         <TextBox x:Name="SearchBox" TextChanged="Search_Changed" PreviewKeyDown="Search_KeyDown" Padding="0"/>

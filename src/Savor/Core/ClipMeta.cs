@@ -35,18 +35,70 @@ public sealed record ClipMeta(string Kind, string? Game)
 
     public void Write(string path)
     {
+        var lines = new List<string> { "kind=" + Kind };
+        if (!string.IsNullOrWhiteSpace(Game)) lines.Add("game=" + Game.Replace('\n', ' ').Replace('\r', ' '));
+        if (Markers.Length > 0)
+            lines.Add("markers=" + string.Join(",", Markers.Select(m => m.ToString("0.###", CultureInfo.InvariantCulture))));
+        bool stored = false;
         try
         {
-            var lines = new List<string> { "kind=" + Kind };
-            if (!string.IsNullOrWhiteSpace(Game)) lines.Add("game=" + Game.Replace('\n', ' ').Replace('\r', ' '));
-            if (Markers.Length > 0)
-                lines.Add("markers=" + string.Join(",", Markers.Select(m => m.ToString("0.###", CultureInfo.InvariantCulture))));
             // writing the stream counts as modifying the file: keep its date so the library order doesn't change
             var when = File.GetLastWriteTimeUtc(path);
             File.WriteAllLines(path + Stream, lines);
             File.SetLastWriteTimeUtc(path, when);
+            // some drives (exFAT/FAT, some synced folders) accept the write but don't keep it: check
+            stored = File.ReadAllLines(path + Stream).SequenceEqual(lines);
         }
-        catch { } // non-NTFS drive: the name still carries the game
+        catch { }
+        if (stored) Index.Forget(path);
+        else Index.Put(path, lines.ToArray());
+    }
+
+    /// <summary>Drops what Savor's own record holds for a file (after it was renamed or deleted).</summary>
+    public static void Forget(string path) => Index.Forget(path);
+
+    /// <summary>
+    /// Savor's own record of capture info, for files whose drive can't keep the hidden stream (exFAT/FAT USB drives,
+    /// some synced folders). Kept in Savor's data folder, keyed by the file's full path.
+    /// </summary>
+    static class Index
+    {
+        static readonly string File_ = System.IO.Path.Combine(AppSettings.LocalDataDir, "capture-info.json");
+        static Dictionary<string, string[]>? _map;
+        static readonly object Lock = new();
+
+        static Dictionary<string, string[]> Map()
+        {
+            if (_map != null) return _map;
+            try
+            {
+                _map = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string[]>>(File.ReadAllText(File_));
+            }
+            catch { }
+            _map = new Dictionary<string, string[]>(_map ?? new(), StringComparer.OrdinalIgnoreCase);
+            return _map;
+        }
+
+        static void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(AppSettings.LocalDataDir);
+                // forget files that no longer exist, so the record never grows without end
+                foreach (var k in _map!.Keys.Where(k => !File.Exists(k)).ToList()) _map.Remove(k);
+                var tmp = File_ + ".tmp";
+                File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(_map));
+                File.Move(tmp, File_, overwrite: true);
+            }
+            catch { }
+        }
+
+        public static string[]? Get(string path) { lock (Lock) return Map().TryGetValue(path, out var l) ? l : null; }
+        public static void Put(string path, string[] lines) { lock (Lock) { Map()[path] = lines; Save(); } }
+        public static void Forget(string path)
+        {
+            lock (Lock) { if (Map().Remove(path)) Save(); }
+        }
     }
 
     /// <summary>Reads the stream, or works it out from the name. Null when the file doesn't look like a Savor capture.</summary>
@@ -56,6 +108,7 @@ public sealed record ClipMeta(string Kind, string? Game)
         {
             string[]? lines = null;
             try { lines = File.ReadAllLines(path + Stream); } catch { } // no stream (or not NTFS)
+            if (lines == null || lines.Length == 0) lines = Index.Get(path); // Savor's own record
             if (lines != null)
             {
                 string kind = Clip;

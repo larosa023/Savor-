@@ -119,6 +119,7 @@ public partial class MainWindow : Window
         };
         Activated += (_, _) => { if (CapturesPage.Visibility == Visibility.Visible) ReloadClips(); UpdatePreview(IsVisible); };
         Deactivated += (_, _) => _deactivatedUtc = DateTime.UtcNow;
+        if (!SelectByTag(SortCombo, _settings.ClipSort)) SortCombo.SelectedIndex = 0; // Sort_Changed ignores it: same value
         _mainPage = StudioPage;
 
         // Make sure the window handle exists even when starting in the tray, so hotkeys work.
@@ -1240,10 +1241,11 @@ public partial class MainWindow : Window
         var all = _all;
         BuildGameFilters(all);
         var q = SearchBox?.Text.Trim() ?? "";
-        var items = all.Where(c => _gameFilter == null || string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase))
-                       .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                                   (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
-                       .Take(MaxCards).ToList();
+        var filtered = all.Where(c => _gameFilter == null || (_gameFilter == NoGameFilter ? c.Game == null
+                                                                                   : string.Equals(c.Game, _gameFilter, StringComparison.OrdinalIgnoreCase)))
+                          .Where(c => q.Length == 0 || c.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                                      (c.Game?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
+        var items = Sorted(filtered).Take(MaxCards).ToList();
         var known = new Dictionary<string, ClipItem>(StringComparer.Ordinal); // a case-only rename must show the new name
         foreach (var c in _clips) known[c.FilePath + "|" + c.Size] = c;
         var next = new List<ClipItem>(items.Count);
@@ -1611,6 +1613,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>"All · Valorant 12 · Minecraft 3" chips; only shown once some captures have a game.</summary>
+    /// <summary>Filter value for captures with no game yet (older clips, clips from other apps).</summary>
+    const string NoGameFilter = "\u0000none";
+
+    IEnumerable<ClipItem> Sorted(IEnumerable<ClipItem> items) => _settings.ClipSort switch
+    {
+        "oldest" => items.OrderBy(c => c.Created),
+        "largest" => items.OrderByDescending(c => c.Size),
+        "smallest" => items.OrderBy(c => c.Size),
+        "name" => items.OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase),
+        "namedesc" => items.OrderByDescending(c => c.Name, StringComparer.CurrentCultureIgnoreCase),
+        "game" => items.OrderBy(c => c.Game == null).ThenBy(c => c.Game, StringComparer.CurrentCultureIgnoreCase).ThenByDescending(c => c.Created),
+        _ => items.OrderByDescending(c => c.Created),
+    };
+
+    void Sort_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi || SortCombo.SelectedItem is not ComboBoxItem { Tag: string tag }) return;
+        if (_settings.ClipSort == tag) return;
+        _settings.ClipSort = tag;
+        _settings.Save();
+        RefreshClips(rescan: false);
+    }
+
     void BuildGameFilters(List<ClipItem> all)
     {
         var games = all.Where(c => c.Game != null)
@@ -1621,7 +1646,9 @@ public partial class MainWindow : Window
         if (_gameFilter != null && !games.Any(g => string.Equals(g.Name, _gameFilter, StringComparison.OrdinalIgnoreCase)))
             _gameFilter = null;
 
-        var sig = (_gameFilter ?? "") + "|" + all.Count + "|" + string.Join("|", games.Select(g => g.Name + g.Count));
+        int noGame = all.Count(c => c.Game == null);
+        if (_gameFilter == NoGameFilter && noGame == 0) _gameFilter = null;
+        var sig = (_gameFilter ?? "") + "|" + all.Count + "|" + noGame + "|" + string.Join("|", games.Select(g => g.Name + g.Count));
         if (sig == _filterSignature) return;
         _filterSignature = sig;
 
@@ -1630,6 +1657,8 @@ public partial class MainWindow : Window
         if (games.Count == 0) return;
         GameFilters.Children.Add(FilterChip("All", all.Count, null));
         foreach (var g in games) GameFilters.Children.Add(FilterChip(g.Name, g.Count, g.Name));
+        // captures with no game yet: one click to see them all, then select and set their game together
+        if (noGame > 0) GameFilters.Children.Add(FilterChip("No game", noGame, NoGameFilter));
     }
 
     RadioButton FilterChip(string label, int count, string? game)
@@ -1649,7 +1678,8 @@ public partial class MainWindow : Window
             _gameFilter = game;
             RefreshClips(rescan: false);
         };
-        if (game != null)
+        if (game == NoGameFilter) rb.ToolTip = "Captures without a game. Select them (Ctrl+A selects all) and use Game to set one.";
+        else if (game != null)
         {
             // right-click a game to rename it
             var item = new MenuItem { Header = "Rename" };
@@ -2394,6 +2424,26 @@ public partial class MainWindow : Window
             try { Directory.Delete(dir, true); } catch { }
         }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "fit to size: FAILED " + ex.Message + "\n"); }
+        try
+        {
+            // older clips not made by Savor: setting a game must stick even where the hidden stream can't be written
+            var dir = Path.Combine(AppSettings.LocalDataDir, "oldclip-test");
+            Directory.CreateDirectory(dir);
+            var a = Path.Combine(dir, "W slide.mp4");
+            var b = Path.Combine(dir, "death bird.mp4");
+            await Ffmpeg.RunAsync(new[] { "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:d=1", a }, TimeSpan.FromSeconds(30));
+            File.Copy(a, b, true);
+            File.SetAttributes(b, FileAttributes.ReadOnly); // read-only: the stream write fails, like on exFAT/FAT drives
+            var before = Library.Scan(dir).Select(c => $"{c.Name}={c.Game ?? "none"}");
+            foreach (var c in Library.Scan(dir)) Library.SetGame(c, c.Name == "W slide" ? "Call of Duty" : "Dark Souls");
+            var after = Library.Scan(dir).Select(c => $"{c.Name}={c.Game ?? "none"}");
+            ClipMeta.Forget(b);
+            File.SetAttributes(b, FileAttributes.Normal);
+            File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"),
+                $"old clips game: before [{string.Join(", ", before)}] after [{string.Join(", ", after)}]\n");
+            try { Directory.Delete(dir, true); } catch { }
+        }
+        catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "old clips game: FAILED " + ex.Message + "\n"); }
         try { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), await SelfTestFrameCheckAsync() + "\n"); }
         catch (Exception ex) { File.AppendAllText(Path.Combine(AppSettings.LocalDataDir, "selftest.log"), "frame check: FAILED " + ex.Message + "\n"); }
 
